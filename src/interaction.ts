@@ -21,6 +21,8 @@ export class Interaction {
   private pieceView: PieceView | null = null;
   private highlightedKeys = new Set<string>();
   private pathPreviewActive = false;
+  private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private longPressPiece: Piece | null = null;
 
   constructor(
     private renderer: Renderer,
@@ -55,9 +57,32 @@ export class Interaction {
       this.beginPathPreview(e.clientX, e.clientY);
       return;
     }
+
     this.mouseDownPos.set(e.clientX, e.clientY);
     this.isPointerDown = true;
     this.isDragging = false;
+
+    if (e.pointerType === 'touch') {
+      this.clearLongPressTimer();
+      this.longPressPiece = this.raycastPiece(e.clientX, e.clientY);
+      if (this.longPressPiece) {
+        this.longPressTimer = setTimeout(() => {
+          this.longPressTimer = null;
+          if (this.longPressPiece) {
+            this.showPathPreviewForPiece(this.longPressPiece);
+            this.longPressPiece = null;
+          }
+        }, 400);
+      }
+    }
+  }
+
+  private clearLongPressTimer(): void {
+    if (this.longPressTimer !== null) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+    this.longPressPiece = null;
   }
 
   private onPointerMove(e: PointerEvent): void {
@@ -66,6 +91,7 @@ export class Interaction {
       const dy = e.clientY - this.mouseDownPos.y;
       if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
         this.isDragging = true;
+        this.clearLongPressTimer();
         this.boardView.clearHover();
         return;
       }
@@ -81,12 +107,23 @@ export class Interaction {
       this.endPathPreview();
       return;
     }
+
+    const hadLongPressTimer = this.longPressTimer !== null;
+    this.clearLongPressTimer();
+
     this.isPointerDown = false;
+
+    if (this.pathPreviewActive) {
+      this.endPathPreview();
+      return;
+    }
 
     if (this.isDragging) {
       this.isDragging = false;
       return;
     }
+
+    if (e.pointerType === 'touch' && !hadLongPressTimer) return;
 
     const pos = this.raycastBestCell(e.clientX, e.clientY);
     if (pos && this.onCellClick) {
@@ -187,11 +224,12 @@ export class Interaction {
   }
 
   private beginPathPreview(clientX: number, clientY: number): void {
-    if (!this.board) return;
-
     const piece = this.raycastPiece(clientX, clientY);
-    if (!piece) return;
+    if (piece) this.showPathPreviewForPiece(piece);
+  }
 
+  private showPathPreviewForPiece(piece: Piece): void {
+    if (!this.board) return;
     const paths = getPiecePaths(this.board, piece);
     this.boardView.showPathPreview(paths.clear, paths.blocked);
     this.pathPreviewActive = true;
