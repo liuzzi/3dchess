@@ -108,7 +108,6 @@ export class Interaction {
       return;
     }
 
-    const hadLongPressTimer = this.longPressTimer !== null;
     this.clearLongPressTimer();
 
     this.isPointerDown = false;
@@ -122,8 +121,6 @@ export class Interaction {
       this.isDragging = false;
       return;
     }
-
-    if (e.pointerType === 'touch' && !hadLongPressTimer) return;
 
     const pos = this.raycastBestCell(e.clientX, e.clientY);
     if (pos && this.onCellClick) {
