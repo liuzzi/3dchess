@@ -3,31 +3,79 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>3D Chess</title>
+  <title>8x8x8 – Chess Reimagined</title>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
   <div id="menu-screen">
+    <div id="menu-bg" aria-hidden="true">
+      <div class="menu-bg-layer menu-bg-layer-1" data-depth="0.55"></div>
+      <div class="menu-bg-layer menu-bg-layer-2" data-depth="1"></div>
+      <div class="menu-bg-layer menu-bg-layer-3" data-depth="1.45"></div>
+    </div>
     <div id="menu-inner">
-      <h1 id="menu-title">3D Chess</h1>
-      <p id="menu-subtitle">8 × 8 × 8</p>
-      <div id="menu-cards">
-        <div class="menu-card">
-          <div class="menu-card-title">Two Players</div>
-          <p class="menu-card-desc">Play on the same device</p>
-          <button class="menu-btn" data-mode="local">Start Game</button>
-        </div>
-        <div class="menu-card">
-          <div class="menu-card-title">vs Bot</div>
-          <p class="menu-card-desc">Play against the AI</p>
-          <div class="menu-difficulty-btns">
-            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="easy">Easy</button>
-            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="medium">Medium</button>
-            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="hard">Hard</button>
+      <h1 id="menu-title">8x8x8</h1>
+      <p id="menu-subtitle">chess reimagined</p>
+      <div id="menu-cubes">
+        <button class="cube-wrapper mode-local" data-mode="local" type="button" aria-label="Two Players">
+          <div class="cube">
+            <div class="cube-face front">
+              <span class="cube-title">Two Players</span>
+              <span class="cube-desc">Same Device</span>
+            </div>
+            <div class="cube-face back"></div>
+            <div class="cube-face left"></div>
+            <div class="cube-face right"></div>
+            <div class="cube-face top"></div>
+            <div class="cube-face bottom"></div>
           </div>
-        </div>
+        </button>
+        <button class="cube-wrapper mode-bot" data-mode="bot" type="button" aria-label="Play versus Bot">
+          <div class="cube">
+            <div class="cube-face front">
+              <span class="cube-title">vs Bot</span>
+              <span class="cube-desc">AI Duel</span>
+            </div>
+            <div class="cube-face back"></div>
+            <div class="cube-face left"></div>
+            <div class="cube-face right"></div>
+            <div class="cube-face top"></div>
+            <div class="cube-face bottom"></div>
+          </div>
+        </button>
+        <button class="cube-wrapper mode-online" data-mode="online" type="button" aria-label="Play Online">
+          <div class="cube">
+            <div class="cube-face front">
+              <span class="cube-title">Online</span>
+              <span class="cube-desc">Invite Link</span>
+            </div>
+            <div class="cube-face back"></div>
+            <div class="cube-face left"></div>
+            <div class="cube-face right"></div>
+            <div class="cube-face top"></div>
+            <div class="cube-face bottom"></div>
+          </div>
+        </button>
+      </div>
+      <div id="menu-submenu">
+        <button id="menu-back-btn" type="button">Back</button>
+        <div id="menu-subcubes"></div>
       </div>
     </div>
+  </div>
+  <div id="online-lobby" style="display:none;">
+    <div id="lobby-inner">
+      <div id="lobby-title">Waiting for opponent...</div>
+      <div id="lobby-link-row">
+        <input id="lobby-link" readonly />
+        <button id="lobby-copy-btn">Copy</button>
+      </div>
+      <div id="lobby-status">Share this link with your opponent</div>
+      <button id="lobby-back-btn" type="button">Back</button>
+    </div>
+  </div>
+  <div id="game-frame" class="game-hidden">
+    <button id="game-home-btn" type="button" aria-label="Return to main menu">8x8x8</button>
   </div>
   <div id="ui-overlay" class="game-hidden">
     <div id="top-bar">
@@ -41,12 +89,13 @@
   </div>
   <div id="side-panel" class="game-hidden">
     <button id="new-game-btn">New Game</button>
+    <button id="undo-btn" style="display:none" disabled>Undo</button>
     <div id="layer-toggles">
       <div class="layer-toggle-title">Layers</div>
     </div>
     <div id="frosting-control">
       <div class="frosting-title">Frosting</div>
-      <input id="frosting-slider" type="range" min="0" max="100" value="4" />
+      <input id="frosting-slider" type="range" min="0" max="100" value="11" />
     </div>
     <div id="controls-help">
       <div class="help-title">Controls</div>

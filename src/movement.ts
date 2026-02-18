@@ -8,18 +8,16 @@ const ROOK_DIRS: Dir[] = [
 ];
 
 const BISHOP_DIRS: Dir[] = [
+  // 2-axis (planar) diagonals
   [1,1,0],[1,-1,0],[-1,1,0],[-1,-1,0],
   [1,0,1],[1,0,-1],[-1,0,1],[-1,0,-1],
   [0,1,1],[0,1,-1],[0,-1,1],[0,-1,-1],
-];
-
-const QUEEN_DIRS: Dir[] = [
-  ...ROOK_DIRS,
-  ...BISHOP_DIRS,
-  // 3-axis diagonals
+  // 3-axis (space) diagonals
   [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1],
   [-1,1,1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],
 ];
+
+const QUEEN_DIRS: Dir[] = [...ROOK_DIRS, ...BISHOP_DIRS];
 
 const KING_DIRS: Dir[] = QUEEN_DIRS;
 
@@ -108,16 +106,10 @@ function pawnMoves(board: Board, piece: Piece): Position3D[] {
     }
   }
 
-  // Captures: diagonal into adjacent layers (forward + layer change, or sideways + layer change)
+  // Captures: diagonal into adjacent layers (sideways + layer change, or forward + sideways + layer change)
   for (const dz of [-1, 1]) {
-    // Forward + layer change
-    const cap1: Position3D = { x, y: y + fwdDir, z: z + dz };
-    if (board.isInBounds(cap1)) {
-      const occ = board.getPieceAt(cap1);
-      if (occ && occ.color !== piece.color) results.push(cap1);
-    }
-    // Sideways + layer change
     for (const dx of [-1, 1]) {
+      // Sideways + layer change
       const cap2: Position3D = { x: x + dx, y, z: z + dz };
       if (board.isInBounds(cap2)) {
         const occ = board.getPieceAt(cap2);
@@ -199,6 +191,39 @@ export function getLegalMoves(board: Board, piece: Piece): Position3D[] {
   });
 }
 
+export function getCheckPath(board: Board, color: PieceColor): Position3D[] {
+  const king = board.findKing(color);
+  if (!king) return [];
+
+  const enemy = color === PieceColor.White ? PieceColor.Black : PieceColor.White;
+  const path: Position3D[] = [{ ...king.position }];
+
+  for (const p of board.getPiecesOfColor(enemy)) {
+    const moves = getRawMoves(board, p);
+    const kp = king.position;
+    if (!moves.some(m => m.x === kp.x && m.y === kp.y && m.z === kp.z)) continue;
+
+    path.push({ ...p.position });
+
+    if (p.type === PieceType.Rook || p.type === PieceType.Bishop || p.type === PieceType.Queen) {
+      const dx = Math.sign(kp.x - p.position.x);
+      const dy = Math.sign(kp.y - p.position.y);
+      const dz = Math.sign(kp.z - p.position.z);
+      let cx = p.position.x + dx;
+      let cy = p.position.y + dy;
+      let cz = p.position.z + dz;
+      while (cx !== kp.x || cy !== kp.y || cz !== kp.z) {
+        path.push({ x: cx, y: cy, z: cz });
+        cx += dx;
+        cy += dy;
+        cz += dz;
+      }
+    }
+  }
+
+  return path;
+}
+
 export function isCheckmate(board: Board, color: PieceColor): boolean {
   if (!isKingInCheck(board, color)) return false;
   for (const p of board.getPiecesOfColor(color)) {
@@ -266,7 +291,7 @@ function pawnPathCells(board: Board, piece: Piece): PiecePaths {
   const fwdDir = piece.color === PieceColor.White ? 1 : -1;
   const { x, y, z } = piece.position;
 
-  const classify = (pos: Position3D) => {
+  const classifyCapture = (pos: Position3D) => {
     if (!board.isInBounds(pos)) return;
     const occ = board.getPieceAt(pos);
     if (occ) {
@@ -276,26 +301,29 @@ function pawnPathCells(board: Board, piece: Piece): PiecePaths {
     }
   };
 
+  const classifyMoveOnly = (pos: Position3D) => {
+    if (!board.isInBounds(pos)) return;
+    if (!board.getPieceAt(pos)) clear.push(pos);
+  };
+
+  // Forward (move-only, no captures)
   const fwd: Position3D = { x, y: y + fwdDir, z };
-  if (board.isInBounds(fwd)) {
-    const fwdOcc = board.getPieceAt(fwd);
-    if (fwdOcc) {
-      if (fwdOcc.color !== piece.color) blocked.push(fwd);
-    } else {
-      clear.push(fwd);
-      if (!piece.hasMoved) classify({ x, y: y + fwdDir * 2, z });
-    }
+  if (board.isInBounds(fwd) && !board.getPieceAt(fwd)) {
+    clear.push(fwd);
+    if (!piece.hasMoved) classifyMoveOnly({ x, y: y + fwdDir * 2, z });
   }
 
-  for (const dz of [-1, 1]) classify({ x, y, z: z + dz });
+  // Layer movement (move-only, no captures)
+  for (const dz of [-1, 1]) classifyMoveOnly({ x, y, z: z + dz });
 
-  for (const dx of [-1, 1]) classify({ x: x + dx, y: y + fwdDir, z });
+  // Diagonal captures (same layer)
+  for (const dx of [-1, 1]) classifyCapture({ x: x + dx, y: y + fwdDir, z });
 
+  // Cross-layer captures
   for (const dz of [-1, 1]) {
-    classify({ x, y: y + fwdDir, z: z + dz });
     for (const dx of [-1, 1]) {
-      classify({ x: x + dx, y, z: z + dz });
-      classify({ x: x + dx, y: y + fwdDir, z: z + dz });
+      classifyCapture({ x: x + dx, y, z: z + dz });
+      classifyCapture({ x: x + dx, y: y + fwdDir, z: z + dz });
     }
   }
 

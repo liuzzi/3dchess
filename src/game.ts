@@ -1,11 +1,11 @@
 import { Board } from './board';
-import { getLegalMoves, isCheckmate, isStalemate, isKingInCheck } from './movement';
-import { Piece, PieceColor, PieceType, Position3D, posEqual, GameMode } from './types';
+import { getLegalMoves, isCheckmate, isStalemate, isKingInCheck, getCheckPath } from './movement';
+import { Piece, PieceColor, PieceType, Position3D, posEqual, GameMode, HistoryEntry } from './types';
 
 export type GameEventCallback = (event: GameEvent) => void;
 
 export interface GameEvent {
-  type: 'move' | 'capture' | 'check' | 'checkmate' | 'stalemate' | 'turnChange' | 'select' | 'deselect' | 'promotion' | 'promotionPrompt' | 'botTurn' | 'reset';
+  type: 'move' | 'capture' | 'check' | 'checkmate' | 'stalemate' | 'turnChange' | 'select' | 'deselect' | 'promotion' | 'promotionPrompt' | 'botTurn' | 'reset' | 'undo';
   data?: unknown;
 }
 
@@ -20,6 +20,8 @@ export class Game {
   awaitingPromotion: Piece | null = null;
   botThinking = false;
   mode: GameMode = { type: 'local' };
+  history: HistoryEntry[] = [];
+  lastMove: { from: Position3D; to: Position3D } | null = null;
 
   private listeners: GameEventCallback[] = [];
 
@@ -49,6 +51,8 @@ export class Game {
     this.gameOver = false;
     this.awaitingPromotion = null;
     this.botThinking = false;
+    this.history = [];
+    this.lastMove = null;
     this.emit({ type: 'reset' });
   }
 
@@ -56,9 +60,14 @@ export class Game {
     return this.mode.type === 'bot' && this.currentTurn === PieceColor.Black;
   }
 
+  isRemoteTurn(): boolean {
+    return this.mode.type === 'online' && this.currentTurn !== this.mode.localColor;
+  }
+
   handleCellClick(pos: Position3D): void {
     if (this.gameOver || this.awaitingPromotion || this.botThinking) return;
     if (this.isBotTurn()) return;
+    if (this.isRemoteTurn()) return;
 
     if (this.selectedPiece) {
       const isValidTarget = this.validMoves.some(m => posEqual(m, pos));
@@ -71,7 +80,11 @@ export class Game {
     const piece = this.board.getPieceAt(pos);
 
     if (piece && piece.color === this.currentTurn) {
-      this.selectPiece(piece);
+      if (this.selectedPiece && posEqual(piece.position, this.selectedPiece.position)) {
+        this.deselect();
+      } else {
+        this.selectPiece(piece);
+      }
     } else {
       this.deselect();
     }
@@ -94,9 +107,59 @@ export class Game {
     this.emit({ type: 'deselect' });
   }
 
+  private pushSnapshot(): void {
+    this.history.push({
+      pieces: this.board.serialize(),
+      currentTurn: this.currentTurn,
+      capturedWhite: this.capturedWhite.map(p => ({ ...p, position: { ...p.position } })),
+      capturedBlack: this.capturedBlack.map(p => ({ ...p, position: { ...p.position } })),
+      lastMove: this.lastMove ? { from: { ...this.lastMove.from }, to: { ...this.lastMove.to } } : undefined,
+    });
+  }
+
+  private restoreSnapshot(entry: HistoryEntry): void {
+    this.board = Board.deserialize(entry.pieces);
+    this.currentTurn = entry.currentTurn;
+    this.capturedWhite = entry.capturedWhite;
+    this.capturedBlack = entry.capturedBlack;
+    this.lastMove = entry.lastMove ?? null;
+    this.selectedPiece = null;
+    this.validMoves = [];
+    this.gameOver = false;
+    this.awaitingPromotion = null;
+    this.botThinking = false;
+  }
+
+  canUndo(): boolean {
+    return (
+      this.history.length > 0 &&
+      !this.gameOver &&
+      !this.awaitingPromotion &&
+      !this.botThinking &&
+      this.mode.type !== 'online'
+    );
+  }
+
+  undo(): void {
+    if (!this.canUndo()) return;
+
+    if (this.mode.type === 'bot' && this.history.length >= 2) {
+      this.history.pop();
+      const entry = this.history.pop()!;
+      this.restoreSnapshot(entry);
+    } else {
+      const entry = this.history.pop()!;
+      this.restoreSnapshot(entry);
+    }
+
+    this.emit({ type: 'undo', data: { lastMove: this.lastMove } });
+  }
+
   private executeMove(piece: Piece, to: Position3D): void {
+    this.pushSnapshot();
     const from = { ...piece.position };
     const captured = this.board.movePiece(piece, to);
+    this.lastMove = { from, to: { ...to } };
 
     if (captured) {
       if (captured.color === PieceColor.White) {
@@ -113,10 +176,15 @@ export class Game {
     if (piece.type === PieceType.Pawn) {
       const promoRow = piece.color === PieceColor.White ? 7 : 0;
       if (piece.position.y === promoRow) {
-        // Bot always auto-promotes to queen
-        if (this.mode.type === 'bot' && piece.color === PieceColor.Black) {
+        const isBotPiece = this.mode.type === 'bot' && piece.color === PieceColor.Black;
+        const isRemotePiece = this.mode.type === 'online' && piece.color !== this.mode.localColor;
+
+        if (isBotPiece) {
           piece.type = PieceType.Queen;
           this.emit({ type: 'promotion', data: { piece } });
+        } else if (isRemotePiece) {
+          this.awaitingPromotion = piece;
+          return;
         } else {
           this.awaitingPromotion = piece;
           this.emit({ type: 'promotionPrompt', data: { piece } });
@@ -138,12 +206,23 @@ export class Game {
     this.endTurn();
   }
 
+  receiveRemoteMove(from: Position3D, to: Position3D): void {
+    const piece = this.board.getPieceAt(from);
+    if (!piece) return;
+    this.executeMove(piece, to);
+  }
+
+  receiveRemotePromotion(chosenType: PieceType): void {
+    this.completePromotion(chosenType);
+  }
+
   private endTurn(): void {
     this.currentTurn = this.currentTurn === PieceColor.White ? PieceColor.Black : PieceColor.White;
     this.emit({ type: 'turnChange', data: { turn: this.currentTurn } });
 
     if (isKingInCheck(this.board, this.currentTurn)) {
-      this.emit({ type: 'check', data: { color: this.currentTurn } });
+      const checkPath = getCheckPath(this.board, this.currentTurn);
+      this.emit({ type: 'check', data: { color: this.currentTurn, checkPath } });
     }
 
     if (isCheckmate(this.board, this.currentTurn)) {

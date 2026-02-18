@@ -29,7 +29,7 @@ export class Renderer {
     };
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
-    this.controls.minDistance = 8;
+    this.controls.minDistance = 1;
     this.controls.maxDistance = 40;
     this.controls.update();
 

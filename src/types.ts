@@ -49,9 +49,18 @@ export function boardToWorld(p: Position3D): [number, number, number] {
   return [p.x, p.z, p.y];
 }
 
+export interface HistoryEntry {
+  pieces: Piece[];
+  currentTurn: PieceColor;
+  capturedWhite: Piece[];
+  capturedBlack: Piece[];
+  lastMove?: { from: Position3D; to: Position3D };
+}
+
 export type Difficulty = 'easy' | 'medium' | 'hard';
 
 export interface GameMode {
-  type: 'local' | 'bot';
+  type: 'local' | 'bot' | 'online';
   difficulty?: Difficulty;
+  localColor?: PieceColor;
 }

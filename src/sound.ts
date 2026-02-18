@@ -89,3 +89,13 @@ export function playCheckmate(): void {
   setTimeout(() => playTone(260, 0.3, 'sawtooth', 0.08), 200);
   setTimeout(() => playTone(196, 0.5, 'sawtooth', 0.1), 400);
 }
+
+export function playMenuClick(): void {
+  playTone(560, 0.05, 'triangle', 0.045);
+  playTone(780, 0.035, 'sine', 0.03);
+}
+
+export function playMenuConfirm(): void {
+  playTone(620, 0.06, 'triangle', 0.055);
+  setTimeout(() => playTone(840, 0.07, 'sine', 0.04), 40);
+}

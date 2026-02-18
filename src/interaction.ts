@@ -17,12 +17,16 @@ export class Interaction {
   private isPointerDown = false;
   private isDragging = false;
   private onCellClick: CellClickCallback | null = null;
+  private onDeselect: (() => void) | null = null;
+  private onHover: ((pos: Position3D | null) => void) | null = null;
+  private canHoverPiece: ((piece: Piece) => boolean) | null = null;
   private board: Board | null = null;
   private pieceView: PieceView | null = null;
   private highlightedKeys = new Set<string>();
   private pathPreviewActive = false;
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
   private longPressPiece: Piece | null = null;
+  private selectedKey: string | null = null;
 
   constructor(
     private renderer: Renderer,
@@ -32,12 +36,37 @@ export class Interaction {
     canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
-    canvas.addEventListener('pointerleave', () => this.boardView.clearHover());
+    canvas.addEventListener('pointerleave', () => {
+      this.boardView.clearHover();
+      this.pieceView?.setHovered(null);
+      this.onHover?.(null);
+      canvas.style.cursor = 'default';
+    });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.onDeselect?.();
+    });
   }
 
   setClickHandler(cb: CellClickCallback): void {
     this.onCellClick = cb;
+  }
+
+  setDeselectHandler(cb: () => void): void {
+    this.onDeselect = cb;
+  }
+
+  setHoverHandler(cb: (pos: Position3D | null) => void): void {
+    this.onHover = cb;
+  }
+
+  setHoverFilter(cb: (piece: Piece) => boolean): void {
+    this.canHoverPiece = cb;
+  }
+
+  setSelectedKey(key: string | null): void {
+    this.selectedKey = key;
   }
 
   setBoard(board: Board): void {
@@ -93,6 +122,8 @@ export class Interaction {
         this.isDragging = true;
         this.clearLongPressTimer();
         this.boardView.clearHover();
+        this.pieceView?.setHovered(null);
+        this.renderer.webgl.domElement.style.cursor = 'default';
         return;
       }
     }
@@ -130,11 +161,23 @@ export class Interaction {
 
   private updateHover(clientX: number, clientY: number): void {
     const pos = this.raycastClosestHighlighted(clientX, clientY);
+    let canInteractWithPiece = false;
+    const piece = this.raycastPiece(clientX, clientY);
+    if (piece && (!this.canHoverPiece || this.canHoverPiece(piece))) {
+      this.pieceView?.setHovered(piece);
+      canInteractWithPiece = true;
+    } else {
+      this.pieceView?.setHovered(null);
+    }
+
+    this.renderer.webgl.domElement.style.cursor = canInteractWithPiece ? 'pointer' : 'default';
+
     if (pos) {
       this.boardView.hoverCell(pos);
     } else {
       this.boardView.clearHover();
     }
+    this.onHover?.(pos);
   }
 
   private raycastClosestHighlighted(clientX: number, clientY: number): Position3D | null {
@@ -171,13 +214,10 @@ export class Interaction {
       if (cellPos) hitCells.push(cellPos);
     }
 
-    for (const pos of hitCells) {
-      if (this.highlightedKeys.has(posKey(pos))) return pos;
-    }
-
     // Raycast piece meshes so clicks land on the piece you can actually see,
     // even when a closer cell (with a different piece) sits between the camera
     // and the target.
+    let hitPiecePos: Position3D | null = null;
     if (this.pieceView) {
       const groups = this.pieceView.getAllPieceGroups();
       const pieceHits = this.raycaster.intersectObjects(groups, true);
@@ -187,10 +227,23 @@ export class Interaction {
           obj = obj.parent;
         }
         if (obj) {
-          return (obj.userData.piece as Piece).position;
+          hitPiecePos = (obj.userData.piece as Piece).position;
         }
       }
     }
+
+    // Clicking the selected piece should always return its position so the
+    // game layer can deselect, even if highlighted cells on other layers are
+    // in the ray's path.
+    if (hitPiecePos && this.selectedKey && posKey(hitPiecePos) === this.selectedKey) {
+      return hitPiecePos;
+    }
+
+    for (const pos of hitCells) {
+      if (this.highlightedKeys.has(posKey(pos))) return pos;
+    }
+
+    if (hitPiecePos) return hitPiecePos;
 
     if (this.board) {
       for (const pos of hitCells) {

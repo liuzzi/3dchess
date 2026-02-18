@@ -18,16 +18,14 @@ const PROMO_CHOICES: { type: PieceType; label: string }[] = [
   { type: PieceType.Knight, label: 'knight' },
 ];
 
-export type LayerToggleCallback = (layer: number, visible: boolean) => void;
-
 export class UI {
   private turnEl: HTMLElement;
   private statusEl: HTMLElement;
   private capturedWhiteEl: HTMLElement;
   private capturedBlackEl: HTMLElement;
   private newGameBtn: HTMLElement;
+  private undoBtn: HTMLButtonElement;
   private promoModal: HTMLElement;
-  private onLayerToggle: LayerToggleCallback | null = null;
 
   constructor(private game: Game, private boardView?: BoardView) {
     this.turnEl = document.getElementById('turn-indicator')!;
@@ -35,20 +33,24 @@ export class UI {
     this.capturedWhiteEl = document.getElementById('captured-white')!;
     this.capturedBlackEl = document.getElementById('captured-black')!;
     this.newGameBtn = document.getElementById('new-game-btn')!;
+    this.undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
     this.promoModal = document.getElementById('promo-modal')!;
 
     this.newGameBtn.addEventListener('click', () => this.game.reset());
+    this.undoBtn.addEventListener('click', () => this.game.undo());
     this.game.on((e) => this.handleEvent(e));
 
     this.setupPromoButtons();
-    this.buildLayerToggles();
     this.setupFrostingSlider();
     this.updateTurn();
     this.updateCaptured();
-  }
+    this.updateUndoBtn();
 
-  setLayerToggleCallback(cb: LayerToggleCallback): void {
-    this.onLayerToggle = cb;
+    if (this.game.mode.type !== 'online') {
+      this.undoBtn.style.display = '';
+    } else {
+      this.undoBtn.style.display = 'none';
+    }
   }
 
   private setupPromoButtons(): void {
@@ -93,28 +95,6 @@ export class UI {
     });
   }
 
-  private buildLayerToggles(): void {
-    const container = document.getElementById('layer-toggles')!;
-    for (let z = 7; z >= 0; z--) {
-      const row = document.createElement('label');
-      row.className = 'layer-row';
-
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = true;
-      cb.addEventListener('change', () => {
-        if (this.onLayerToggle) {
-          this.onLayerToggle(z, cb.checked);
-        }
-      });
-
-      const label = document.createTextNode(`Layer ${z + 1}`);
-      row.appendChild(cb);
-      row.appendChild(label);
-      container.appendChild(row);
-    }
-  }
-
   private handleEvent(event: GameEvent): void {
     switch (event.type) {
       case 'turnChange':
@@ -129,13 +109,27 @@ export class UI {
       case 'capture':
         this.updateCaptured();
         break;
-      case 'check':
-        this.statusEl.textContent = `${this.game.currentTurn === PieceColor.White ? 'White' : 'Black'} is in CHECK!`;
+      case 'check': {
+        const inCheck = this.game.currentTurn;
+        const checkColor = inCheck === PieceColor.White ? 'White' : 'Black';
+        if (this.game.mode.type === 'online' && this.game.mode.localColor) {
+          const isYou = inCheck === this.game.mode.localColor;
+          this.statusEl.textContent = isYou ? `You are in CHECK!` : `Opponent is in CHECK!`;
+        } else {
+          this.statusEl.textContent = `${checkColor} is in CHECK!`;
+        }
         break;
+      }
       case 'checkmate': {
-        const winner = this.game.currentTurn === PieceColor.White ? 'Black' : 'White';
-        this.turnEl.textContent = `Checkmate!`;
-        this.statusEl.textContent = `${winner} wins!`;
+        const loser = this.game.currentTurn;
+        const winnerColor = loser === PieceColor.White ? 'Black' : 'White';
+        this.turnEl.textContent = 'Checkmate!';
+        if (this.game.mode.type === 'online' && this.game.mode.localColor) {
+          const youWon = loser !== this.game.mode.localColor;
+          this.statusEl.textContent = youWon ? 'You win!' : 'You lose!';
+        } else {
+          this.statusEl.textContent = `${winnerColor} wins!`;
+        }
         break;
       }
       case 'stalemate':
@@ -153,14 +147,30 @@ export class UI {
       case 'promotion':
         this.hidePromoModal();
         break;
+      case 'undo':
+        this.updateTurn();
+        this.updateCaptured();
+        this.statusEl.textContent = '';
+        this.hidePromoModal();
+        break;
     }
+    this.updateUndoBtn();
   }
 
   private updateTurn(): void {
     if (!this.game.gameOver) {
       const color = this.game.currentTurn === PieceColor.White ? 'White' : 'Black';
-      this.turnEl.textContent = `${color}'s Turn`;
+      if (this.game.mode.type === 'online' && this.game.mode.localColor) {
+        const isYours = this.game.currentTurn === this.game.mode.localColor;
+        this.turnEl.textContent = isYours ? `Your Turn (${color})` : `Opponent's Turn (${color})`;
+      } else {
+        this.turnEl.textContent = `${color}'s Turn`;
+      }
     }
+  }
+
+  private updateUndoBtn(): void {
+    this.undoBtn.disabled = !this.game.canUndo();
   }
 
   private updateCaptured(): void {

@@ -85,4 +85,25 @@ export class Board {
     }
     return b;
   }
+
+  serialize(): Piece[] {
+    return this.pieces.map(p => ({
+      type: p.type,
+      color: p.color,
+      position: { ...p.position },
+      hasMoved: p.hasMoved,
+    }));
+  }
+
+  static deserialize(data: Piece[]): Board {
+    const b = new Board();
+    b.pieces = [];
+    b.pieceMap.clear();
+    for (const p of data) {
+      const piece: Piece = { type: p.type, color: p.color, position: { ...p.position }, hasMoved: p.hasMoved };
+      b.pieces.push(piece);
+      b.pieceMap.set(posKey(piece.position), piece);
+    }
+    return b;
+  }
 }
