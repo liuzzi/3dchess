@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>3D Chess</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="menu-screen">
+    <div id="menu-inner">
+      <h1 id="menu-title">3D Chess</h1>
+      <p id="menu-subtitle">8 × 8 × 8</p>
+      <div id="menu-cards">
+        <div class="menu-card">
+          <div class="menu-card-title">Two Players</div>
+          <p class="menu-card-desc">Play on the same device</p>
+          <button class="menu-btn" data-mode="local">Start Game</button>
+        </div>
+        <div class="menu-card">
+          <div class="menu-card-title">vs Bot</div>
+          <p class="menu-card-desc">Play against the AI</p>
+          <div class="menu-difficulty-btns">
+            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="easy">Easy</button>
+            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="medium">Medium</button>
+            <button class="menu-btn menu-btn-diff" data-mode="bot" data-difficulty="hard">Hard</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="ui-overlay" class="game-hidden">
+    <div id="top-bar">
+      <div id="turn-indicator">White's Turn</div>
+      <div id="game-status"></div>
+    </div>
+    <div id="captured-pieces">
+      <div id="captured-white" class="captured-row"></div>
+      <div id="captured-black" class="captured-row"></div>
+    </div>
+  </div>
+  <div id="side-panel" class="game-hidden">
+    <button id="new-game-btn">New Game</button>
+    <div id="layer-toggles">
+      <div class="layer-toggle-title">Layers</div>
+    </div>
+    <div id="controls-help">
+      <div class="help-title">Controls</div>
+      <div class="help-item">Click piece to select</div>
+      <div class="help-item">Click green cell to move</div>
+      <div class="help-item">Drag to rotate</div>
+      <div class="help-item">Scroll to zoom</div>
+    </div>
+  </div>
+  <div id="promo-modal" class="modal-hidden game-hidden">
+    <div id="promo-modal-inner">
+      <div id="promo-title">Promote Pawn</div>
+      <div id="promo-options">
+        <button class="promo-btn" data-piece="queen"><span class="promo-icon"></span>Queen</button>
+        <button class="promo-btn" data-piece="rook"><span class="promo-icon"></span>Rook</button>
+        <button class="promo-btn" data-piece="bishop"><span class="promo-icon"></span>Bishop</button>
+        <button class="promo-btn" data-piece="knight"><span class="promo-icon"></span>Knight</button>
+      </div>
+    </div>
+  </div>
+  <canvas id="game-canvas" class="game-hidden"></canvas>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
