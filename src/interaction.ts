@@ -4,6 +4,7 @@ import { BoardView } from './boardView';
 import { PieceView } from './pieceView';
 import { Board } from './board';
 import { Piece, Position3D, posKey } from './types';
+import { getPiecePaths } from './movement';
 
 const DRAG_THRESHOLD = 5;
 
@@ -19,6 +20,7 @@ export class Interaction {
   private board: Board | null = null;
   private pieceView: PieceView | null = null;
   private highlightedKeys = new Set<string>();
+  private pathPreviewActive = false;
 
   constructor(
     private renderer: Renderer,
@@ -29,6 +31,7 @@ export class Interaction {
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     canvas.addEventListener('pointerleave', () => this.boardView.clearHover());
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   setClickHandler(cb: CellClickCallback): void {
@@ -48,6 +51,10 @@ export class Interaction {
   }
 
   private onPointerDown(e: PointerEvent): void {
+    if (e.button === 2) {
+      this.beginPathPreview(e.clientX, e.clientY);
+      return;
+    }
     this.mouseDownPos.set(e.clientX, e.clientY);
     this.isPointerDown = true;
     this.isDragging = false;
@@ -70,6 +77,10 @@ export class Interaction {
   }
 
   private onPointerUp(e: PointerEvent): void {
+    if (e.button === 2) {
+      this.endPathPreview();
+      return;
+    }
     this.isPointerDown = false;
 
     if (this.isDragging) {
@@ -155,5 +166,40 @@ export class Interaction {
 
     if (hitCells.length > 0) return hitCells[0];
     return null;
+  }
+
+  private raycastPiece(clientX: number, clientY: number): Piece | null {
+    if (!this.pieceView) return null;
+
+    this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
+    this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+    this.raycaster.setFromCamera(this.mouse, this.renderer.camera);
+
+    const groups = this.pieceView.getAllPieceGroups();
+    const hits = this.raycaster.intersectObjects(groups, true);
+    if (hits.length === 0) return null;
+
+    let obj: THREE.Object3D | null = hits[0].object;
+    while (obj && !(obj.userData as Record<string, unknown>)?.piece) {
+      obj = obj.parent;
+    }
+    return obj ? (obj.userData.piece as Piece) : null;
+  }
+
+  private beginPathPreview(clientX: number, clientY: number): void {
+    if (!this.board) return;
+
+    const piece = this.raycastPiece(clientX, clientY);
+    if (!piece) return;
+
+    const paths = getPiecePaths(this.board, piece);
+    this.boardView.showPathPreview(paths.clear, paths.blocked);
+    this.pathPreviewActive = true;
+  }
+
+  private endPathPreview(): void {
+    if (!this.pathPreviewActive) return;
+    this.boardView.clearPathPreview();
+    this.pathPreviewActive = false;
   }
 }

@@ -22,6 +22,11 @@ export class Renderer {
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.target.set(3.5, 3.5, 3.5);
+    this.controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.ROTATE,
+    };
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.minDistance = 8;

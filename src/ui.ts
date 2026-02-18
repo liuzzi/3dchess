@@ -42,6 +42,7 @@ export class UI {
 
     this.setupPromoButtons();
     this.buildLayerToggles();
+    this.setupFrostingSlider();
     this.updateTurn();
     this.updateCaptured();
   }
@@ -82,6 +83,14 @@ export class UI {
 
   private hidePromoModal(): void {
     this.promoModal.classList.add('modal-hidden');
+  }
+
+  private setupFrostingSlider(): void {
+    const slider = document.getElementById('frosting-slider') as HTMLInputElement;
+    if (!slider || !this.boardView) return;
+    slider.addEventListener('input', () => {
+      this.boardView!.setFrosting(Number(slider.value) / 100);
+    });
   }
 
   private buildLayerToggles(): void {

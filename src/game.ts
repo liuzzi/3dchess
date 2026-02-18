@@ -95,6 +95,7 @@ export class Game {
   }
 
   private executeMove(piece: Piece, to: Position3D): void {
+    const from = { ...piece.position };
     const captured = this.board.movePiece(piece, to);
 
     if (captured) {
@@ -106,7 +107,7 @@ export class Game {
       this.emit({ type: 'capture', data: { captured } });
     }
 
-    this.emit({ type: 'move', data: { piece, to, captured } });
+    this.emit({ type: 'move', data: { piece, from, to, captured } });
     this.deselect();
 
     if (piece.type === PieceType.Pawn) {

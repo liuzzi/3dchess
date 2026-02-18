@@ -68,9 +68,10 @@ function initGame(mode: GameMode): void {
         interaction.setHighlightedCells(new Set());
         break;
       case 'move': {
-        const { captured } = event.data as { captured?: Piece };
+        const { from, to, captured } = event.data as { from: Position3D; to: Position3D; captured?: Piece };
         if (!captured) playMove();
         pieceView.sync(game.board);
+        boardView.highlightLastMove(from, to);
         break;
       }
       case 'capture':
@@ -91,6 +92,7 @@ function initGame(mode: GameMode): void {
       case 'reset':
         pieceView.sync(game.board);
         boardView.clearHighlights();
+        boardView.clearLastMove();
         interaction.setHighlightedCells(new Set());
         interaction.setBoard(game.board);
         break;
@@ -109,7 +111,8 @@ async function handleBotTurn(): Promise<void> {
   const statusEl = document.getElementById('game-status')!;
   statusEl.textContent = 'Thinking...';
 
-  await new Promise(r => setTimeout(r, 350));
+  const delay = 2000 + Math.random() * 3000;
+  await new Promise(r => setTimeout(r, delay));
 
   try {
     const move = await bot.pickMove(game.board);

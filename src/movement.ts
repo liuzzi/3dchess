@@ -214,3 +214,101 @@ export function isStalemate(board: Board, color: PieceColor): boolean {
   }
   return true;
 }
+
+export interface PiecePaths {
+  clear: Position3D[];
+  blocked: Position3D[];
+}
+
+function slidePathCells(board: Board, piece: Piece, dirs: Dir[]): PiecePaths {
+  const clear: Position3D[] = [];
+  const blocked: Position3D[] = [];
+  for (const [dx, dy, dz] of dirs) {
+    let { x, y, z } = piece.position;
+    while (true) {
+      x += dx; y += dy; z += dz;
+      const pos: Position3D = { x, y, z };
+      if (!board.isInBounds(pos)) break;
+      const occupant = board.getPieceAt(pos);
+      if (occupant) {
+        if (occupant.color !== piece.color) blocked.push(pos);
+        break;
+      }
+      clear.push(pos);
+    }
+  }
+  return { clear, blocked };
+}
+
+function stepPathCells(board: Board, piece: Piece, dirs: Dir[]): PiecePaths {
+  const clear: Position3D[] = [];
+  const blocked: Position3D[] = [];
+  for (const [dx, dy, dz] of dirs) {
+    const pos: Position3D = {
+      x: piece.position.x + dx,
+      y: piece.position.y + dy,
+      z: piece.position.z + dz,
+    };
+    if (!board.isInBounds(pos)) continue;
+    const occupant = board.getPieceAt(pos);
+    if (occupant) {
+      if (occupant.color !== piece.color) blocked.push(pos);
+    } else {
+      clear.push(pos);
+    }
+  }
+  return { clear, blocked };
+}
+
+function pawnPathCells(board: Board, piece: Piece): PiecePaths {
+  const clear: Position3D[] = [];
+  const blocked: Position3D[] = [];
+  const fwdDir = piece.color === PieceColor.White ? 1 : -1;
+  const { x, y, z } = piece.position;
+
+  const classify = (pos: Position3D) => {
+    if (!board.isInBounds(pos)) return;
+    const occ = board.getPieceAt(pos);
+    if (occ) {
+      if (occ.color !== piece.color) blocked.push(pos);
+    } else {
+      clear.push(pos);
+    }
+  };
+
+  const fwd: Position3D = { x, y: y + fwdDir, z };
+  if (board.isInBounds(fwd)) {
+    const fwdOcc = board.getPieceAt(fwd);
+    if (fwdOcc) {
+      if (fwdOcc.color !== piece.color) blocked.push(fwd);
+    } else {
+      clear.push(fwd);
+      if (!piece.hasMoved) classify({ x, y: y + fwdDir * 2, z });
+    }
+  }
+
+  for (const dz of [-1, 1]) classify({ x, y, z: z + dz });
+
+  for (const dx of [-1, 1]) classify({ x: x + dx, y: y + fwdDir, z });
+
+  for (const dz of [-1, 1]) {
+    classify({ x, y: y + fwdDir, z: z + dz });
+    for (const dx of [-1, 1]) {
+      classify({ x: x + dx, y, z: z + dz });
+      classify({ x: x + dx, y: y + fwdDir, z: z + dz });
+    }
+  }
+
+  return { clear, blocked };
+}
+
+export function getPiecePaths(board: Board, piece: Piece): PiecePaths {
+  switch (piece.type) {
+    case PieceType.Rook:   return slidePathCells(board, piece, ROOK_DIRS);
+    case PieceType.Bishop: return slidePathCells(board, piece, BISHOP_DIRS);
+    case PieceType.Queen:  return slidePathCells(board, piece, QUEEN_DIRS);
+    case PieceType.King:   return stepPathCells(board, piece, KING_DIRS);
+    case PieceType.Knight: return stepPathCells(board, piece, KNIGHT_MOVES);
+    case PieceType.Pawn:   return pawnPathCells(board, piece);
+  }
+}

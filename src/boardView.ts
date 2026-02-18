@@ -18,8 +18,11 @@ export class BoardView {
   private captureKeys: Set<string> = new Set();
   private selectedCell: string | null = null;
   private hoveredCell: string | null = null;
+  private pathPreviewCells: Set<string> = new Set();
+  private lastMoveCells: Set<string> = new Set();
 
   private baseStyles: Map<string, CellBase> = new Map();
+  private frostingLevel: number = 0.035;
 
   constructor() {
     this.group = new THREE.Group();
@@ -173,7 +176,50 @@ export class BoardView {
     }
   }
 
+  highlightLastMove(from: Position3D, to: Position3D): void {
+    for (const key of this.lastMoveCells) {
+      this.restoreCellToBase(key);
+    }
+    this.lastMoveCells.clear();
+
+    const fromKey = posKey(from);
+    const toKey = posKey(to);
+    this.lastMoveCells.add(fromKey);
+    this.lastMoveCells.add(toKey);
+
+    this.applyLastMoveStyle(fromKey);
+    this.applyLastMoveStyle(toKey);
+  }
+
+  clearLastMove(): void {
+    for (const key of this.lastMoveCells) {
+      this.restoreCellToBase(key);
+    }
+    this.lastMoveCells.clear();
+  }
+
+  private applyLastMoveStyle(key: string): void {
+    const mesh = this.cellMeshes.get(key);
+    if (mesh) {
+      (mesh.material as THREE.MeshBasicMaterial).color.set(0xaa77dd);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.18;
+    }
+    const edge = this.cellEdges.get(key);
+    if (edge) {
+      (edge.material as THREE.LineDashedMaterial).color.set(0xcc99ff);
+      (edge.material as THREE.LineDashedMaterial).opacity = 0.7;
+    }
+  }
+
   private restoreCell(key: string): void {
+    if (this.lastMoveCells.has(key)) {
+      this.applyLastMoveStyle(key);
+      return;
+    }
+    this.restoreCellToBase(key);
+  }
+
+  private restoreCellToBase(key: string): void {
     const base = this.baseStyles.get(key);
     if (!base) return;
 
@@ -190,6 +236,62 @@ export class BoardView {
     }
   }
 
+  showPathPreview(clear: Position3D[], blocked: Position3D[]): void {
+    this.clearPathPreview();
+
+    for (const pos of clear) {
+      const key = posKey(pos);
+      this.pathPreviewCells.add(key);
+      const mesh = this.cellMeshes.get(key);
+      if (mesh) {
+        (mesh.material as THREE.MeshBasicMaterial).color.set(0x8899aa);
+        (mesh.material as THREE.MeshBasicMaterial).opacity = 0.09;
+      }
+      const edge = this.cellEdges.get(key);
+      if (edge) {
+        (edge.material as THREE.LineDashedMaterial).color.set(0x99aabb);
+        (edge.material as THREE.LineDashedMaterial).opacity = 0.4;
+      }
+    }
+
+    for (const pos of blocked) {
+      const key = posKey(pos);
+      this.pathPreviewCells.add(key);
+      const mesh = this.cellMeshes.get(key);
+      if (mesh) {
+        (mesh.material as THREE.MeshBasicMaterial).color.set(0xff3333);
+        (mesh.material as THREE.MeshBasicMaterial).opacity = 0.2;
+      }
+      const edge = this.cellEdges.get(key);
+      if (edge) {
+        (edge.material as THREE.LineDashedMaterial).color.set(0xff5555);
+        (edge.material as THREE.LineDashedMaterial).opacity = 0.7;
+      }
+    }
+  }
+
+  clearPathPreview(): void {
+    for (const key of this.pathPreviewCells) {
+      if (key === this.selectedCell) {
+        const mesh = this.cellMeshes.get(key);
+        if (mesh) {
+          (mesh.material as THREE.MeshBasicMaterial).color.set(0xddcc22);
+          (mesh.material as THREE.MeshBasicMaterial).opacity = 0.25;
+        }
+        const edge = this.cellEdges.get(key);
+        if (edge) {
+          (edge.material as THREE.LineDashedMaterial).color.set(0xffee44);
+          (edge.material as THREE.LineDashedMaterial).opacity = 0.9;
+        }
+      } else if (this.highlightedCells.has(key)) {
+        this.reapplyHighlight(key);
+      } else {
+        this.restoreCell(key);
+      }
+    }
+    this.pathPreviewCells.clear();
+  }
+
   isHighlighted(pos: Position3D): boolean {
     return this.highlightedCells.has(posKey(pos));
   }
@@ -203,6 +305,24 @@ export class BoardView {
         const edge = this.cellEdges.get(key);
         if (edge) edge.visible = visible;
       }
+    }
+  }
+
+  setFrosting(level: number): void {
+    this.frostingLevel = 0.005 + level * 0.495;
+    for (const [key, mesh] of this.cellMeshes) {
+      if (
+        this.highlightedCells.has(key) ||
+        key === this.selectedCell ||
+        key === this.hoveredCell ||
+        this.pathPreviewCells.has(key) ||
+        this.lastMoveCells.has(key)
+      ) continue;
+
+      const base = this.baseStyles.get(key);
+      if (!base) continue;
+      base.opacity = this.frostingLevel;
+      (mesh.material as THREE.MeshBasicMaterial).opacity = this.frostingLevel;
     }
   }
 
