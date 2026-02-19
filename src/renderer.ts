@@ -6,6 +6,8 @@ export class Renderer {
   camera: THREE.PerspectiveCamera;
   webgl: THREE.WebGLRenderer;
   controls: OrbitControls;
+  private rafId: number | null = null;
+  private boundOnResize = () => this.onResize();
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
@@ -46,7 +48,7 @@ export class Renderer {
 
     this.addAxisLabels();
 
-    window.addEventListener('resize', () => this.onResize());
+    window.addEventListener('resize', this.boundOnResize);
   }
 
   private addAxisLabels(): void {
@@ -106,8 +108,18 @@ export class Renderer {
     const loop = () => {
       callback();
       this.render();
-      requestAnimationFrame(loop);
+      this.rafId = requestAnimationFrame(loop);
     };
-    requestAnimationFrame(loop);
+    this.rafId = requestAnimationFrame(loop);
+  }
+
+  dispose(): void {
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    window.removeEventListener('resize', this.boundOnResize);
+    this.controls.dispose();
+    this.webgl.dispose();
   }
 }

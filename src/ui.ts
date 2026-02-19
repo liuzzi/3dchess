@@ -43,6 +43,7 @@ export class UI {
   private moveOptionButtons = new Map<string, HTMLButtonElement>();
   private hoveredMoveKey: string | null = null;
   private attackPreviewHolding = false;
+  private ac = new AbortController();
 
   constructor(
     private game: Game,
@@ -64,10 +65,11 @@ export class UI {
     this.onAttackPreviewStart = options?.onAttackPreviewStart ?? (() => {});
     this.onAttackPreviewEnd = options?.onAttackPreviewEnd ?? (() => {});
 
+    const signal = this.ac.signal;
     this.newGameBtn.addEventListener('click', () => {
       void this.handleNewGameClick();
-    });
-    this.undoBtn.addEventListener('click', () => this.game.undo());
+    }, { signal });
+    this.undoBtn.addEventListener('click', () => this.game.undo(), { signal });
     this.game.on((e) => this.handleEvent(e));
 
     this.setupPromoButtons();
@@ -94,6 +96,7 @@ export class UI {
   }
 
   private setupPromoButtons(): void {
+    const signal = this.ac.signal;
     const buttons = this.promoModal.querySelectorAll<HTMLButtonElement>('.promo-btn');
     buttons.forEach(btn => {
       const pieceLabel = btn.dataset.piece;
@@ -103,7 +106,7 @@ export class UI {
       btn.addEventListener('click', () => {
         this.game.completePromotion(choice.type);
         this.hidePromoModal();
-      });
+      }, { signal });
     });
   }
 
@@ -132,7 +135,7 @@ export class UI {
     if (!slider || !this.boardView) return;
     slider.addEventListener('input', () => {
       this.boardView!.setFrosting(Number(slider.value) / 100);
-    });
+    }, { signal: this.ac.signal });
   }
 
   private setupOutlineBrightnessSlider(): void {
@@ -140,7 +143,7 @@ export class UI {
     if (!slider || !this.boardView) return;
     slider.addEventListener('input', () => {
       this.boardView!.setOutlineBrightness(Number(slider.value) / 100);
-    });
+    }, { signal: this.ac.signal });
   }
 
   private setupAttackPreviewButton(): void {
@@ -171,20 +174,21 @@ export class UI {
       this.onAttackPreviewEnd();
     };
 
+    const signal = this.ac.signal;
     btn.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       e.preventDefault();
       startHold(e.pointerId);
-    });
+    }, { signal });
     btn.addEventListener('pointerup', (e) => {
       endHold(e.pointerId);
-    });
+    }, { signal });
     btn.addEventListener('pointercancel', (e) => {
       endHold(e.pointerId);
-    });
+    }, { signal });
     btn.addEventListener('lostpointercapture', () => {
       endHold();
-    });
+    }, { signal });
 
     btn.addEventListener('keydown', (e) => {
       if (e.repeat) return;
@@ -192,16 +196,16 @@ export class UI {
         e.preventDefault();
         startHold();
       }
-    });
+    }, { signal });
     btn.addEventListener('keyup', (e) => {
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault();
         endHold();
       }
-    });
+    }, { signal });
     btn.addEventListener('blur', () => {
       endHold();
-    });
+    }, { signal });
   }
 
   private formatPos(pos: Position3D): string {
@@ -395,5 +399,9 @@ export class UI {
       .sort(sortByType)
       .map(capturedSymbol)
       .join(' ');
+  }
+
+  dispose(): void {
+    this.ac.abort();
   }
 }

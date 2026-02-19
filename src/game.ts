@@ -56,6 +56,10 @@ export class Game {
     this.listeners.push(cb);
   }
 
+  removeAllListeners(): void {
+    this.listeners.length = 0;
+  }
+
   private emit(event: GameEvent): void {
     for (const cb of this.listeners) cb(event);
   }

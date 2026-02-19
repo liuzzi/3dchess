@@ -27,26 +27,28 @@ export class Interaction {
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
   private longPressPiece: Piece | null = null;
   private selectedKey: string | null = null;
+  private ac = new AbortController();
 
   constructor(
     private renderer: Renderer,
     private boardView: BoardView,
   ) {
+    const signal = this.ac.signal;
     const canvas = renderer.webgl.domElement;
-    canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
-    canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
-    canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e), { signal });
+    canvas.addEventListener('pointermove', (e) => this.onPointerMove(e), { signal });
+    canvas.addEventListener('pointerup', (e) => this.onPointerUp(e), { signal });
     canvas.addEventListener('pointerleave', () => {
       this.boardView.clearHover();
       this.pieceView?.setHovered(null);
       this.onHover?.(null);
       canvas.style.cursor = 'default';
-    });
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    }, { signal });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') this.onDeselect?.();
-    });
+    }, { signal });
   }
 
   setClickHandler(cb: CellClickCallback): void {
@@ -289,5 +291,10 @@ export class Interaction {
     if (!this.pathPreviewActive) return;
     this.boardView.clearPathPreview();
     this.pathPreviewActive = false;
+  }
+
+  dispose(): void {
+    this.ac.abort();
+    this.clearLongPressTimer();
   }
 }

@@ -58,7 +58,15 @@ function queueHoverPreview(pos: Position3D | null): void {
   });
 }
 
+function disposeCurrentGame(): void {
+  if (renderer) renderer.dispose();
+  if (interaction) interaction.dispose();
+  if (ui) ui.dispose();
+  if (game) game.removeAllListeners();
+}
+
 function initGame(mode: GameMode): void {
+  disposeCurrentGame();
   attackPreviewActive = false;
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
