@@ -1,6 +1,7 @@
 import { Game, GameEvent } from './game';
-import { PieceColor, PieceType } from './types';
+import { Piece, PieceColor, PieceType, Position3D, posKey } from './types';
 import { BoardView } from './boardView';
+import { confirmNewGame } from './confirmDialog';
 
 const PIECE_SYMBOLS: Record<PieceType, { white: string; black: string }> = {
   [PieceType.King]:   { white: '\u2654', black: '\u265A' },
@@ -18,6 +19,12 @@ const PROMO_CHOICES: { type: PieceType; label: string }[] = [
   { type: PieceType.Knight, label: 'knight' },
 ];
 
+interface UIOptions {
+  onMoveHover?: (pos: Position3D | null) => void;
+  onAttackPreviewStart?: () => void;
+  onAttackPreviewEnd?: () => void;
+}
+
 export class UI {
   private turnEl: HTMLElement;
   private statusEl: HTMLElement;
@@ -26,8 +33,22 @@ export class UI {
   private newGameBtn: HTMLElement;
   private undoBtn: HTMLButtonElement;
   private promoModal: HTMLElement;
+  private movePanelEl: HTMLElement | null;
+  private movePanelEmptyEl: HTMLElement | null;
+  private moveOptionsEl: HTMLElement | null;
+  private attackPreviewBtn: HTMLButtonElement | null;
+  private onMoveHover: (pos: Position3D | null) => void;
+  private onAttackPreviewStart: () => void;
+  private onAttackPreviewEnd: () => void;
+  private moveOptionButtons = new Map<string, HTMLButtonElement>();
+  private hoveredMoveKey: string | null = null;
+  private attackPreviewHolding = false;
 
-  constructor(private game: Game, private boardView?: BoardView) {
+  constructor(
+    private game: Game,
+    private boardView?: BoardView,
+    options?: UIOptions,
+  ) {
     this.turnEl = document.getElementById('turn-indicator')!;
     this.statusEl = document.getElementById('game-status')!;
     this.capturedWhiteEl = document.getElementById('captured-white')!;
@@ -35,22 +56,41 @@ export class UI {
     this.newGameBtn = document.getElementById('new-game-btn')!;
     this.undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
     this.promoModal = document.getElementById('promo-modal')!;
+    this.movePanelEl = document.getElementById('move-panel');
+    this.movePanelEmptyEl = document.getElementById('move-panel-empty');
+    this.moveOptionsEl = document.getElementById('move-options');
+    this.attackPreviewBtn = document.getElementById('attack-preview-btn') as HTMLButtonElement | null;
+    this.onMoveHover = options?.onMoveHover ?? (() => {});
+    this.onAttackPreviewStart = options?.onAttackPreviewStart ?? (() => {});
+    this.onAttackPreviewEnd = options?.onAttackPreviewEnd ?? (() => {});
 
-    this.newGameBtn.addEventListener('click', () => this.game.reset());
+    this.newGameBtn.addEventListener('click', () => {
+      void this.handleNewGameClick();
+    });
     this.undoBtn.addEventListener('click', () => this.game.undo());
     this.game.on((e) => this.handleEvent(e));
 
     this.setupPromoButtons();
     this.setupFrostingSlider();
+    this.setupOutlineBrightnessSlider();
+    this.setupAttackPreviewButton();
     this.updateTurn();
     this.updateCaptured();
     this.updateUndoBtn();
+    this.clearMoveOptions();
 
     if (this.game.mode.type !== 'online') {
       this.undoBtn.style.display = '';
     } else {
       this.undoBtn.style.display = 'none';
     }
+  }
+
+  private async handleNewGameClick(): Promise<void> {
+    const confirmed = await confirmNewGame();
+      if (!confirmed) return;
+      this.onMoveHover(null);
+      this.game.reset();
   }
 
   private setupPromoButtons(): void {
@@ -95,8 +135,158 @@ export class UI {
     });
   }
 
+  private setupOutlineBrightnessSlider(): void {
+    const slider = document.getElementById('outline-brightness-slider') as HTMLInputElement;
+    if (!slider || !this.boardView) return;
+    slider.addEventListener('input', () => {
+      this.boardView!.setOutlineBrightness(Number(slider.value) / 100);
+    });
+  }
+
+  private setupAttackPreviewButton(): void {
+    const btn = this.attackPreviewBtn;
+    if (!btn) return;
+
+    const startHold = (pointerId?: number): void => {
+      if (this.attackPreviewHolding) return;
+      this.attackPreviewHolding = true;
+      btn.classList.add('is-holding');
+      if (pointerId !== undefined) {
+        try {
+          btn.setPointerCapture(pointerId);
+        } catch {
+          // Ignore capture failures for unsupported/legacy pointer scenarios.
+        }
+      }
+      this.onAttackPreviewStart();
+    };
+
+    const endHold = (pointerId?: number): void => {
+      if (!this.attackPreviewHolding) return;
+      this.attackPreviewHolding = false;
+      btn.classList.remove('is-holding');
+      if (pointerId !== undefined && btn.hasPointerCapture(pointerId)) {
+        btn.releasePointerCapture(pointerId);
+      }
+      this.onAttackPreviewEnd();
+    };
+
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      startHold(e.pointerId);
+    });
+    btn.addEventListener('pointerup', (e) => {
+      endHold(e.pointerId);
+    });
+    btn.addEventListener('pointercancel', (e) => {
+      endHold(e.pointerId);
+    });
+    btn.addEventListener('lostpointercapture', () => {
+      endHold();
+    });
+
+    btn.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        startHold();
+      }
+    });
+    btn.addEventListener('keyup', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        endHold();
+      }
+    });
+    btn.addEventListener('blur', () => {
+      endHold();
+    });
+  }
+
+  private formatPos(pos: Position3D): string {
+    return `X${pos.x + 1} Y${pos.y + 1} Z${pos.z + 1}`;
+  }
+
+  private moveLabel(piece: Piece, to: Position3D): string {
+    const target = this.game.board.getPieceAt(to);
+    const base = `${piece.type.toUpperCase()} -> ${this.formatPos(to)}`;
+    if (target && target.color !== piece.color) return `${base} (capture ${target.type})`;
+    return base;
+  }
+
+  private clearMoveOptions(emptyText = 'Select a piece to see moves'): void {
+    if (!this.moveOptionsEl || !this.movePanelEmptyEl || !this.movePanelEl) return;
+    this.moveOptionButtons.clear();
+    this.hoveredMoveKey = null;
+    this.moveOptionsEl.replaceChildren();
+    this.movePanelEmptyEl.textContent = emptyText;
+    this.movePanelEmptyEl.style.display = '';
+    this.movePanelEl.style.display = 'none';
+    this.onMoveHover(null);
+  }
+
+  private renderMoveOptions(piece: Piece, moves: Position3D[]): void {
+    if (!this.moveOptionsEl || !this.movePanelEmptyEl || !this.movePanelEl) return;
+    this.moveOptionsEl.replaceChildren();
+    this.onMoveHover(null);
+    this.movePanelEl.style.display = 'flex';
+
+    if (moves.length === 0) {
+      this.movePanelEmptyEl.textContent = 'No legal moves';
+      this.movePanelEmptyEl.style.display = '';
+      return;
+    }
+
+    this.movePanelEmptyEl.style.display = 'none';
+    for (const to of moves) {
+      const key = posKey(to);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'move-option-btn';
+      const target = this.game.board.getPieceAt(to);
+      if (target && target.color !== piece.color) btn.classList.add('is-capture');
+      btn.textContent = this.moveLabel(piece, to);
+      btn.addEventListener('mouseenter', () => this.onMoveHover(to));
+      btn.addEventListener('focus', () => this.onMoveHover(to));
+      btn.addEventListener('mouseleave', () => this.onMoveHover(null));
+      btn.addEventListener('blur', () => this.onMoveHover(null));
+      btn.addEventListener('click', () => {
+        this.onMoveHover(null);
+        this.game.handleCellClick(to);
+      });
+      this.moveOptionsEl.appendChild(btn);
+      this.moveOptionButtons.set(key, btn);
+    }
+  }
+
+  setHoveredMove(pos: Position3D | null): void {
+    if (this.hoveredMoveKey) {
+      const prev = this.moveOptionButtons.get(this.hoveredMoveKey);
+      prev?.classList.remove('is-hovered');
+      this.hoveredMoveKey = null;
+    }
+    if (!pos) return;
+
+    const key = posKey(pos);
+    const next = this.moveOptionButtons.get(key);
+    if (!next) return;
+
+    next.classList.add('is-hovered');
+    next.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    this.hoveredMoveKey = key;
+  }
+
   private handleEvent(event: GameEvent): void {
     switch (event.type) {
+      case 'select': {
+        const { piece, moves } = event.data;
+        this.renderMoveOptions(piece, moves);
+        break;
+      }
+      case 'deselect':
+        this.clearMoveOptions();
+        break;
       case 'turnChange':
         this.updateTurn();
         break;
@@ -105,6 +295,7 @@ export class UI {
         this.updateCaptured();
         this.statusEl.textContent = '';
         this.hidePromoModal();
+        this.clearMoveOptions();
         break;
       case 'capture':
         this.updateCaptured();
@@ -138,9 +329,10 @@ export class UI {
         break;
       case 'move':
         this.statusEl.textContent = '';
+        this.clearMoveOptions();
         break;
       case 'promotionPrompt': {
-        const { piece } = event.data as { piece: { color: PieceColor } };
+        const { piece } = event.data;
         this.showPromoModal(piece.color);
         break;
       }
@@ -152,6 +344,7 @@ export class UI {
         this.updateCaptured();
         this.statusEl.textContent = '';
         this.hidePromoModal();
+        this.clearMoveOptions();
         break;
     }
     this.updateUndoBtn();
@@ -174,20 +367,33 @@ export class UI {
   }
 
   private updateCaptured(): void {
-    if (this.game.capturedWhite.length) {
-      this.capturedWhiteEl.textContent = this.game.capturedWhite
-        .map(p => PIECE_SYMBOLS[p.type].white).join('');
-      this.capturedWhiteEl.style.display = '';
-    } else {
-      this.capturedWhiteEl.style.display = 'none';
-    }
+    const order: PieceType[] = [
+      PieceType.Pawn,
+      PieceType.Knight,
+      PieceType.Bishop,
+      PieceType.Rook,
+      PieceType.Queen,
+      PieceType.King,
+    ];
+    const sortByType = (a: Piece, b: Piece): number => order.indexOf(a.type) - order.indexOf(b.type);
+    const capturedSymbol = (piece: Piece): string => (
+      piece.color === PieceColor.White
+        ? PIECE_SYMBOLS[piece.type].black
+        : PIECE_SYMBOLS[piece.type].white
+    );
 
-    if (this.game.capturedBlack.length) {
-      this.capturedBlackEl.textContent = this.game.capturedBlack
-        .map(p => PIECE_SYMBOLS[p.type].black).join('');
-      this.capturedBlackEl.style.display = '';
-    } else {
-      this.capturedBlackEl.style.display = 'none';
-    }
+    // White row: pieces captured by White (i.e. Black pieces taken)
+    this.capturedWhiteEl.textContent = this.game.capturedBlack
+      .slice()
+      .sort(sortByType)
+      .map(capturedSymbol)
+      .join(' ');
+
+    // Black row: pieces captured by Black (i.e. White pieces taken)
+    this.capturedBlackEl.textContent = this.game.capturedWhite
+      .slice()
+      .sort(sortByType)
+      .map(capturedSymbol)
+      .join(' ');
   }
 }

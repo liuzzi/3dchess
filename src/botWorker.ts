@@ -1,6 +1,7 @@
 import { Board } from './board';
 import { getLegalMoves, isKingInCheck } from './movement';
 import { Piece, PieceColor, PieceType, Position3D, Difficulty } from './types';
+import { autoPromoteToQueen } from './promotion';
 
 const PIECE_VALUE: Record<PieceType, number> = {
   [PieceType.Pawn]: 100,
@@ -116,14 +117,10 @@ function minimax(
   if (maximizing) {
     let maxEval = -Infinity;
     for (const move of ordered) {
-      const sim = board.clone();
-      const simPiece = sim.getPieceAt(move.piece.position)!;
-      sim.movePiece(simPiece, move.to);
-      if (simPiece.type === PieceType.Pawn) {
-        const promoRow = simPiece.color === PieceColor.White ? 7 : 0;
-        if (simPiece.position.y === promoRow) simPiece.type = PieceType.Queen;
-      }
-      const ev = minimax(sim, depth - 1, alpha, beta, false, botColor);
+      const applied = board.applyMove(move.piece, move.to);
+      autoPromoteToQueen(move.piece);
+      const ev = minimax(board, depth - 1, alpha, beta, false, botColor);
+      board.unapplyMove(applied);
       maxEval = Math.max(maxEval, ev);
       alpha = Math.max(alpha, ev);
       if (beta <= alpha) break;
@@ -132,14 +129,10 @@ function minimax(
   } else {
     let minEval = Infinity;
     for (const move of ordered) {
-      const sim = board.clone();
-      const simPiece = sim.getPieceAt(move.piece.position)!;
-      sim.movePiece(simPiece, move.to);
-      if (simPiece.type === PieceType.Pawn) {
-        const promoRow = simPiece.color === PieceColor.White ? 7 : 0;
-        if (simPiece.position.y === promoRow) simPiece.type = PieceType.Queen;
-      }
-      const ev = minimax(sim, depth - 1, alpha, beta, true, botColor);
+      const applied = board.applyMove(move.piece, move.to);
+      autoPromoteToQueen(move.piece);
+      const ev = minimax(board, depth - 1, alpha, beta, true, botColor);
+      board.unapplyMove(applied);
       minEval = Math.min(minEval, ev);
       beta = Math.min(beta, ev);
       if (beta <= alpha) break;
@@ -162,15 +155,10 @@ function searchAtDepth(board: Board, color: PieceColor, depth: number, noisy: bo
   const scored: ScoredMove[] = [];
 
   for (const move of ordered) {
-    const sim = board.clone();
-    const simPiece = sim.getPieceAt(move.piece.position)!;
-    sim.movePiece(simPiece, move.to);
-    if (simPiece.type === PieceType.Pawn) {
-      const promoRow = simPiece.color === PieceColor.White ? 7 : 0;
-      if (simPiece.position.y === promoRow) simPiece.type = PieceType.Queen;
-    }
-
-    let score = minimax(sim, depth - 1, -Infinity, Infinity, false, color);
+    const applied = board.applyMove(move.piece, move.to);
+    autoPromoteToQueen(move.piece);
+    let score = minimax(board, depth - 1, -Infinity, Infinity, false, color);
+    board.unapplyMove(applied);
 
     if (noisy) {
       score += (Math.random() - 0.5) * 80;

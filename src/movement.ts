@@ -4,14 +4,17 @@ import { Piece, PieceColor, PieceType, Position3D } from './types';
 type Dir = [number, number, number];
 
 const ROOK_DIRS: Dir[] = [
+  // Axis-aligned (straight slides)
   [1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1],
+  // xz-plane diagonals (stays in same row — y unchanged)
+  [1,0,1],[1,0,-1],[-1,0,1],[-1,0,-1],
+  // yz-plane diagonals (stays in same column — x unchanged)
+  [0,1,1],[0,1,-1],[0,-1,1],[0,-1,-1],
 ];
 
 const BISHOP_DIRS: Dir[] = [
-  // 2-axis (planar) diagonals
+  // 2-axis diagonals (xy-plane only — always changes row AND column)
   [1,1,0],[1,-1,0],[-1,1,0],[-1,-1,0],
-  [1,0,1],[1,0,-1],[-1,0,1],[-1,0,-1],
-  [0,1,1],[0,1,-1],[0,-1,1],[0,-1,-1],
   // 3-axis (space) diagonals
   [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1],
   [-1,1,1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],
@@ -77,50 +80,33 @@ function pawnMoves(board: Board, piece: Piece): Position3D[] {
   const fwdDir = piece.color === PieceColor.White ? 1 : -1;
   const { x, y, z } = piece.position;
 
-  // Forward on same layer (+y for white, -y for black)
-  const fwd: Position3D = { x, y: y + fwdDir, z };
-  if (board.isInBounds(fwd) && !board.getPieceAt(fwd)) {
-    results.push(fwd);
+  const moveDirs: Dir[] = [
+    [0, fwdDir, 0],   // forward
+    [0, 0, 1],        // layer up
+    [0, 0, -1],       // layer down
+    [0, fwdDir, 1],   // forward staircase up
+    [0, fwdDir, -1],  // forward staircase down
+  ];
+
+  for (const [dx, dy, dz] of moveDirs) {
+    const step1: Position3D = { x: x + dx, y: y + dy, z: z + dz };
+    if (!board.isInBounds(step1) || board.getPieceAt(step1)) continue;
+    results.push(step1);
     if (!piece.hasMoved) {
-      const fwd2: Position3D = { x, y: y + fwdDir * 2, z };
-      if (board.isInBounds(fwd2) && !board.getPieceAt(fwd2)) {
-        results.push(fwd2);
+      const step2: Position3D = { x: x + dx * 2, y: y + dy * 2, z: z + dz * 2 };
+      if (board.isInBounds(step2) && !board.getPieceAt(step2)) {
+        results.push(step2);
       }
     }
   }
 
-  // Layer movement: pawns can move one layer up OR down (both sides share center)
-  for (const dz of [-1, 1]) {
-    const layerMove: Position3D = { x, y, z: z + dz };
-    if (board.isInBounds(layerMove) && !board.getPieceAt(layerMove)) {
-      results.push(layerMove);
-    }
-  }
-
-  // Captures: diagonal forward on same layer (x +/- 1, y forward)
-  for (const dx of [-1, 1]) {
-    const cap: Position3D = { x: x + dx, y: y + fwdDir, z };
-    if (board.isInBounds(cap)) {
+  // Captures: only forward diagonals (same layer, one layer up, one layer down)
+  for (const dz of [-1, 0, 1]) {
+    for (const dx of [-1, 1]) {
+      const cap: Position3D = { x: x + dx, y: y + fwdDir, z: z + dz };
+      if (!board.isInBounds(cap)) continue;
       const occ = board.getPieceAt(cap);
       if (occ && occ.color !== piece.color) results.push(cap);
-    }
-  }
-
-  // Captures: diagonal into adjacent layers (sideways + layer change, or forward + sideways + layer change)
-  for (const dz of [-1, 1]) {
-    for (const dx of [-1, 1]) {
-      // Sideways + layer change
-      const cap2: Position3D = { x: x + dx, y, z: z + dz };
-      if (board.isInBounds(cap2)) {
-        const occ = board.getPieceAt(cap2);
-        if (occ && occ.color !== piece.color) results.push(cap2);
-      }
-      // Forward + sideways + layer change (full 3D diagonal capture)
-      const cap3: Position3D = { x: x + dx, y: y + fwdDir, z: z + dz };
-      if (board.isInBounds(cap3)) {
-        const occ = board.getPieceAt(cap3);
-        if (occ && occ.color !== piece.color) results.push(cap3);
-      }
     }
   }
 
@@ -176,19 +162,33 @@ function getRawMoves(board: Board, piece: Piece): Position3D[] {
     case PieceType.Queen: return slideMoves(board, piece, QUEEN_DIRS);
     case PieceType.King: return stepMoves(board, piece, KING_DIRS);
     case PieceType.Knight: return stepMoves(board, piece, KNIGHT_MOVES);
-    case PieceType.Pawn: return pawnMoves(board, piece);
+    case PieceType.Pawn: return pawnAttackSquares(board, piece);
   }
+}
+
+function pawnAttackSquares(board: Board, piece: Piece): Position3D[] {
+  const attacks: Position3D[] = [];
+  const fwdDir = piece.color === PieceColor.White ? 1 : -1;
+  const { x, y, z } = piece.position;
+  for (const dz of [-1, 0, 1]) {
+    for (const dx of [-1, 1]) {
+      const pos: Position3D = { x: x + dx, y: y + fwdDir, z: z + dz };
+      if (board.isInBounds(pos)) attacks.push(pos);
+    }
+  }
+  return attacks;
 }
 
 export function getLegalMoves(board: Board, piece: Piece): Position3D[] {
   const candidates = getValidMoves(board, piece);
-  return candidates.filter(to => {
-    const sim = board.clone();
-    const simPiece = sim.getPieceAt(piece.position);
-    if (!simPiece) return false;
-    sim.movePiece(simPiece, to);
-    return !isKingInCheck(sim, piece.color);
-  });
+  const legal: Position3D[] = [];
+  for (const to of candidates) {
+    const applied = board.applyMove(piece, to);
+    const inCheck = isKingInCheck(board, piece.color);
+    board.unapplyMove(applied);
+    if (!inCheck) legal.push(to);
+  }
+  return legal;
 }
 
 export function getCheckPath(board: Board, color: PieceColor): Position3D[] {
@@ -301,28 +301,29 @@ function pawnPathCells(board: Board, piece: Piece): PiecePaths {
     }
   };
 
-  const classifyMoveOnly = (pos: Position3D) => {
-    if (!board.isInBounds(pos)) return;
-    if (!board.getPieceAt(pos)) clear.push(pos);
-  };
+  const moveDirs: Dir[] = [
+    [0, fwdDir, 0],   // forward
+    [0, 0, 1],        // layer up
+    [0, 0, -1],       // layer down
+    [0, fwdDir, 1],   // forward staircase up
+    [0, fwdDir, -1],  // forward staircase down
+  ];
 
-  // Forward (move-only, no captures)
-  const fwd: Position3D = { x, y: y + fwdDir, z };
-  if (board.isInBounds(fwd) && !board.getPieceAt(fwd)) {
-    clear.push(fwd);
-    if (!piece.hasMoved) classifyMoveOnly({ x, y: y + fwdDir * 2, z });
+  for (const [dx, dy, dz] of moveDirs) {
+    const step1: Position3D = { x: x + dx, y: y + dy, z: z + dz };
+    if (!board.isInBounds(step1) || board.getPieceAt(step1)) continue;
+    clear.push(step1);
+    if (!piece.hasMoved) {
+      const step2: Position3D = { x: x + dx * 2, y: y + dy * 2, z: z + dz * 2 };
+      if (board.isInBounds(step2) && !board.getPieceAt(step2)) {
+        clear.push(step2);
+      }
+    }
   }
 
-  // Layer movement (move-only, no captures)
-  for (const dz of [-1, 1]) classifyMoveOnly({ x, y, z: z + dz });
-
-  // Diagonal captures (same layer)
-  for (const dx of [-1, 1]) classifyCapture({ x: x + dx, y: y + fwdDir, z });
-
-  // Cross-layer captures
-  for (const dz of [-1, 1]) {
+  // Captures: only forward diagonals (same layer, one layer up, one layer down)
+  for (const dz of [-1, 0, 1]) {
     for (const dx of [-1, 1]) {
-      classifyCapture({ x: x + dx, y, z: z + dz });
       classifyCapture({ x: x + dx, y: y + fwdDir, z: z + dz });
     }
   }

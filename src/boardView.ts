@@ -13,6 +13,7 @@ export class BoardView {
   group: THREE.Group;
   cellMeshes: Map<string, THREE.Mesh> = new Map();
   cellEdges: Map<string, THREE.LineSegments> = new Map();
+  private cellMeshList: THREE.Mesh[] = [];
 
   private highlightedCells: Set<string> = new Set();
   private captureKeys: Set<string> = new Set();
@@ -27,6 +28,7 @@ export class BoardView {
 
   private baseStyles: Map<string, CellBase> = new Map();
   private frostingLevel: number = 0.06;
+  private outlineBrightness: number = 0.3;
 
   constructor() {
     this.group = new THREE.Group();
@@ -79,13 +81,14 @@ export class BoardView {
           mesh.renderOrder = 0;
           this.group.add(mesh);
           this.cellMeshes.set(key, mesh);
+          this.cellMeshList.push(mesh);
 
           const lineMat = new THREE.LineDashedMaterial({
             color: edgeColor,
             dashSize: 0.08,
             gapSize: 0.06,
             transparent: true,
-            opacity: 0.3,
+            opacity: this.outlineBrightness,
           });
           const line = new THREE.LineSegments(edgeGeo, lineMat);
           line.position.set(wx, wy, wz);
@@ -286,8 +289,19 @@ export class BoardView {
     const edge = this.cellEdges.get(key);
     if (edge) {
       (edge.material as THREE.LineDashedMaterial).color.set(base.edgeColor);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.3;
+      (edge.material as THREE.LineDashedMaterial).opacity = this.outlineBrightness;
     }
+  }
+
+  private isCellInSpecialState(key: string): boolean {
+    return (
+      this.highlightedCells.has(key) ||
+      key === this.selectedCell ||
+      key === this.hoveredCell ||
+      this.pathPreviewCells.has(key) ||
+      this.lastMoveCells.has(key) ||
+      this.checkPathCells.has(key)
+    );
   }
 
   showPathPreview(clear: Position3D[], blocked: Position3D[]): void {
@@ -353,19 +367,20 @@ export class BoardView {
   setFrosting(level: number): void {
     this.frostingLevel = 0.005 + level * 0.495;
     for (const [key, mesh] of this.cellMeshes) {
-      if (
-        this.highlightedCells.has(key) ||
-        key === this.selectedCell ||
-        key === this.hoveredCell ||
-        this.pathPreviewCells.has(key) ||
-        this.lastMoveCells.has(key) ||
-        this.checkPathCells.has(key)
-      ) continue;
+      if (this.isCellInSpecialState(key)) continue;
 
       const base = this.baseStyles.get(key);
       if (!base) continue;
       base.opacity = this.frostingLevel;
       (mesh.material as THREE.MeshBasicMaterial).opacity = this.frostingLevel;
+    }
+  }
+
+  setOutlineBrightness(level: number): void {
+    this.outlineBrightness = Math.max(0, Math.min(level, 1));
+    for (const [key, edge] of this.cellEdges) {
+      if (this.isCellInSpecialState(key)) continue;
+      (edge.material as THREE.LineDashedMaterial).opacity = this.outlineBrightness;
     }
   }
 
@@ -455,6 +470,6 @@ export class BoardView {
   }
 
   getAllCellMeshes(): THREE.Mesh[] {
-    return Array.from(this.cellMeshes.values());
+    return this.cellMeshList;
   }
 }

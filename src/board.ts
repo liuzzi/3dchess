@@ -56,6 +56,54 @@ export class Board {
     return captured;
   }
 
+  applyMove(piece: Piece, to: Position3D): AppliedMove {
+    const from = { ...piece.position };
+    const previousHasMoved = piece.hasMoved;
+    const previousType = piece.type;
+    let captured = this.getPieceAt(to);
+    let capturedIndex = -1;
+
+    if (captured) {
+      capturedIndex = this.pieces.indexOf(captured);
+      this.removePiece(captured);
+    }
+
+    this.pieceMap.delete(posKey(piece.position));
+    piece.position = { ...to };
+    piece.hasMoved = true;
+    this.pieceMap.set(posKey(piece.position), piece);
+
+    return {
+      piece,
+      from,
+      to: { ...to },
+      captured,
+      capturedIndex,
+      previousHasMoved,
+      previousType,
+    };
+  }
+
+  unapplyMove(applied: AppliedMove): void {
+    const { piece, from, captured, capturedIndex, previousHasMoved, previousType } = applied;
+    this.pieceMap.delete(posKey(piece.position));
+    piece.position = { ...from };
+    piece.hasMoved = previousHasMoved;
+    piece.type = previousType;
+    this.pieceMap.set(posKey(piece.position), piece);
+
+    if (captured) {
+      const restorePos = { ...applied.to };
+      captured.position = restorePos;
+      this.pieceMap.set(posKey(restorePos), captured);
+      if (capturedIndex >= 0 && capturedIndex <= this.pieces.length) {
+        this.pieces.splice(capturedIndex, 0, captured);
+      } else {
+        this.pieces.push(captured);
+      }
+    }
+  }
+
   removePiece(piece: Piece): void {
     this.pieceMap.delete(posKey(piece.position));
     const idx = this.pieces.indexOf(piece);
@@ -106,4 +154,14 @@ export class Board {
     }
     return b;
   }
+}
+
+export interface AppliedMove {
+  piece: Piece;
+  from: Position3D;
+  to: Position3D;
+  captured?: Piece;
+  capturedIndex: number;
+  previousHasMoved: boolean;
+  previousType: PieceType;
 }

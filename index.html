@@ -82,20 +82,23 @@
       <div id="turn-indicator">White's Turn</div>
       <div id="game-status"></div>
     </div>
-    <div id="captured-pieces">
-      <div id="captured-white" class="captured-row"></div>
-      <div id="captured-black" class="captured-row"></div>
-    </div>
   </div>
   <div id="side-panel" class="game-hidden">
     <button id="new-game-btn">New Game</button>
     <button id="undo-btn" style="display:none" disabled>Undo</button>
+    <button id="attack-preview-btn" type="button" aria-label="Hold to preview attack surface">
+      Hold: Preview Attack Surface
+    </button>
     <div id="layer-toggles">
       <div class="layer-toggle-title">Layers</div>
     </div>
-    <div id="frosting-control">
-      <div class="frosting-title">Frosting</div>
-      <input id="frosting-slider" type="range" min="0" max="100" value="11" />
+    <div id="frosting-control" class="panel-slider-control">
+      <div class="panel-slider-title">Frosting</div>
+      <input id="frosting-slider" class="panel-slider" type="range" min="0" max="100" value="11" />
+    </div>
+    <div id="outline-brightness-control" class="panel-slider-control">
+      <div class="panel-slider-title">Outline Brightness</div>
+      <input id="outline-brightness-slider" class="panel-slider" type="range" min="0" max="100" value="30" />
     </div>
     <div id="controls-help">
       <div class="help-title">Controls</div>
@@ -104,6 +107,21 @@
       <div class="help-item">Drag to rotate</div>
       <div class="help-item">Scroll to zoom</div>
     </div>
+    <div id="captured-pieces">
+      <div class="captured-entry">
+        <div class="captured-label">White</div>
+        <div id="captured-white" class="captured-row"></div>
+      </div>
+      <div class="captured-entry">
+        <div class="captured-label">Black</div>
+        <div id="captured-black" class="captured-row"></div>
+      </div>
+    </div>
+  </div>
+  <div id="move-panel" class="game-hidden">
+    <div id="move-panel-title">Legal Moves</div>
+    <div id="move-panel-empty">Select a piece to see moves</div>
+    <div id="move-options" aria-live="polite"></div>
   </div>
   <div id="promo-modal" class="modal-hidden game-hidden">
     <div id="promo-modal-inner">
@@ -113,6 +131,16 @@
         <button class="promo-btn" data-piece="rook"><span class="promo-icon"></span>Rook</button>
         <button class="promo-btn" data-piece="bishop"><span class="promo-icon"></span>Bishop</button>
         <button class="promo-btn" data-piece="knight"><span class="promo-icon"></span>Knight</button>
+      </div>
+    </div>
+  </div>
+  <div id="confirm-modal" class="modal-hidden">
+    <div id="confirm-modal-inner">
+      <button id="confirm-close-btn" type="button" aria-label="Close confirmation">X</button>
+      <div id="confirm-title">Start New Game?</div>
+      <div id="confirm-message">Current progress will be lost.</div>
+      <div id="confirm-actions">
+        <button id="confirm-ok-btn" type="button">Start</button>
       </div>
     </div>
   </div>

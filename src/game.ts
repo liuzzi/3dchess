@@ -1,19 +1,30 @@
 import { Board } from './board';
 import { getLegalMoves, isCheckmate, isStalemate, isKingInCheck, getCheckPath } from './movement';
 import { Piece, PieceColor, PieceType, Position3D, posEqual, GameMode, HistoryEntry } from './types';
+import { isPromotionSquare } from './promotion';
 
 export type GameEventCallback = (event: GameEvent) => void;
 
-export interface GameEvent {
-  type: 'move' | 'capture' | 'check' | 'checkmate' | 'stalemate' | 'turnChange' | 'select' | 'deselect' | 'promotion' | 'promotionPrompt' | 'botTurn' | 'reset' | 'undo';
-  data?: unknown;
-}
+export type GameEvent =
+  | { type: 'move'; data: { piece: Piece; from: Position3D; to: Position3D; captured?: Piece } }
+  | { type: 'capture'; data: { captured: Piece } }
+  | { type: 'check'; data: { color: PieceColor; checkPath: Position3D[] } }
+  | { type: 'checkmate'; data: { loser: PieceColor } }
+  | { type: 'stalemate' }
+  | { type: 'turnChange'; data: { turn: PieceColor } }
+  | { type: 'select'; data: { piece: Piece; moves: Position3D[] } }
+  | { type: 'deselect' }
+  | { type: 'promotion'; data: { piece: Piece } }
+  | { type: 'promotionPrompt'; data: { piece: Piece } }
+  | { type: 'botTurn' }
+  | { type: 'reset' }
+  | { type: 'undo'; data: { lastMove: { from: Position3D; to: Position3D } | null } };
 
 export class Game {
   board: Board;
   currentTurn: PieceColor = PieceColor.White;
-  selectedPiece: Piece | null = null;
-  validMoves: Position3D[] = [];
+  private _selectedPiece: Piece | null = null;
+  private _validMoves: Position3D[] = [];
   capturedWhite: Piece[] = [];
   capturedBlack: Piece[] = [];
   gameOver = false;
@@ -33,6 +44,14 @@ export class Game {
     this.mode = mode;
   }
 
+  get selectedPiece(): Piece | null {
+    return this._selectedPiece;
+  }
+
+  get validMoves(): Position3D[] {
+    return this._validMoves;
+  }
+
   on(cb: GameEventCallback): void {
     this.listeners.push(cb);
   }
@@ -44,8 +63,8 @@ export class Game {
   reset(): void {
     this.board.reset();
     this.currentTurn = PieceColor.White;
-    this.selectedPiece = null;
-    this.validMoves = [];
+    this._selectedPiece = null;
+    this._validMoves = [];
     this.capturedWhite = [];
     this.capturedBlack = [];
     this.gameOver = false;
@@ -69,10 +88,10 @@ export class Game {
     if (this.isBotTurn()) return;
     if (this.isRemoteTurn()) return;
 
-    if (this.selectedPiece) {
-      const isValidTarget = this.validMoves.some(m => posEqual(m, pos));
+    if (this._selectedPiece) {
+      const isValidTarget = this._validMoves.some(m => posEqual(m, pos));
       if (isValidTarget) {
-        this.executeMove(this.selectedPiece, pos);
+        this.executeMove(this._selectedPiece, pos);
         return;
       }
     }
@@ -80,7 +99,7 @@ export class Game {
     const piece = this.board.getPieceAt(pos);
 
     if (piece && piece.color === this.currentTurn) {
-      if (this.selectedPiece && posEqual(piece.position, this.selectedPiece.position)) {
+      if (this._selectedPiece && posEqual(piece.position, this._selectedPiece.position)) {
         this.deselect();
       } else {
         this.selectPiece(piece);
@@ -96,14 +115,14 @@ export class Game {
   }
 
   private selectPiece(piece: Piece): void {
-    this.selectedPiece = piece;
-    this.validMoves = getLegalMoves(this.board, piece);
-    this.emit({ type: 'select', data: { piece, moves: this.validMoves } });
+    this._selectedPiece = piece;
+    this._validMoves = getLegalMoves(this.board, piece);
+    this.emit({ type: 'select', data: { piece, moves: this._validMoves } });
   }
 
   deselect(): void {
-    this.selectedPiece = null;
-    this.validMoves = [];
+    this._selectedPiece = null;
+    this._validMoves = [];
     this.emit({ type: 'deselect' });
   }
 
@@ -123,8 +142,8 @@ export class Game {
     this.capturedWhite = entry.capturedWhite;
     this.capturedBlack = entry.capturedBlack;
     this.lastMove = entry.lastMove ?? null;
-    this.selectedPiece = null;
-    this.validMoves = [];
+    this._selectedPiece = null;
+    this._validMoves = [];
     this.gameOver = false;
     this.awaitingPromotion = null;
     this.botThinking = false;
@@ -173,23 +192,20 @@ export class Game {
     this.emit({ type: 'move', data: { piece, from, to, captured } });
     this.deselect();
 
-    if (piece.type === PieceType.Pawn) {
-      const promoRow = piece.color === PieceColor.White ? 7 : 0;
-      if (piece.position.y === promoRow) {
-        const isBotPiece = this.mode.type === 'bot' && piece.color === PieceColor.Black;
-        const isRemotePiece = this.mode.type === 'online' && piece.color !== this.mode.localColor;
+    if (isPromotionSquare(piece)) {
+      const isBotPiece = this.mode.type === 'bot' && piece.color === PieceColor.Black;
+      const isRemotePiece = this.mode.type === 'online' && piece.color !== this.mode.localColor;
 
-        if (isBotPiece) {
-          piece.type = PieceType.Queen;
-          this.emit({ type: 'promotion', data: { piece } });
-        } else if (isRemotePiece) {
-          this.awaitingPromotion = piece;
-          return;
-        } else {
-          this.awaitingPromotion = piece;
-          this.emit({ type: 'promotionPrompt', data: { piece } });
-          return;
-        }
+      if (isBotPiece) {
+        piece.type = PieceType.Queen;
+        this.emit({ type: 'promotion', data: { piece } });
+      } else if (isRemotePiece) {
+        this.awaitingPromotion = piece;
+        return;
+      } else {
+        this.awaitingPromotion = piece;
+        this.emit({ type: 'promotionPrompt', data: { piece } });
+        return;
       }
     }
 
