@@ -62,6 +62,13 @@ export interface RootMove {
   to: Position3D;
 }
 
+interface DepthResult {
+  depth: number;
+  fromPos: Position3D;
+  to: Position3D;
+  score: number;
+}
+
 type BoundFlag = 'exact' | 'alpha' | 'beta';
 
 interface TranspositionEntry {
@@ -561,7 +568,7 @@ function iterativeSearch(
   color: PieceColor,
   difficulty: Difficulty,
   rootMoves?: RootMove[],
-): ScoredMove {
+): { best: ScoredMove; completedDepth: number; depthResults: DepthResult[] } {
   const noisy = difficulty === 'easy';
   const maxDepth = MAX_DEPTH[difficulty];
   const timeLimit = computeAdaptiveTimeLimit(board, color, difficulty);
@@ -583,6 +590,8 @@ function iterativeSearch(
 
   let bestResult: ScoredMove[] | null = null;
   let pvMoveKey: string | undefined;
+  let completedDepth = 0;
+  const depthResults: DepthResult[] = [];
 
   for (let depth = 1; depth <= maxDepth; depth++) {
     nodesSearched = 0;
@@ -590,11 +599,20 @@ function iterativeSearch(
       const result = searchAtDepth(board, color, depth, noisy, restrictedRootMoves, pvMoveKey);
       bestResult = result;
       const best = result[0];
+      completedDepth = depth;
+      depthResults.push({ depth, fromPos: best.fromPos, to: best.to, score: best.rawScore });
       pvMoveKey = moveKey(best.fromPos, best.to);
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (!bestResult) {
           bestResult = guaranteedDepthOne(board, color, noisy, restrictedRootMoves);
+          completedDepth = 1;
+          depthResults.push({
+            depth: 1,
+            fromPos: bestResult[0].fromPos,
+            to: bestResult[0].to,
+            score: bestResult[0].rawScore,
+          });
         }
         break;
       }
@@ -606,7 +624,7 @@ function iterativeSearch(
     throw new Error('Bot has no legal moves');
   }
 
-  return bestResult[0];
+  return { best: bestResult[0], completedDepth, depthResults };
 }
 
 export interface WorkerRequest {
@@ -621,6 +639,8 @@ export interface WorkerResponse {
   fromPos?: Position3D;
   to?: Position3D;
   score?: number;
+  completedDepth?: number;
+  depthResults?: DepthResult[];
   error?: string;
 }
 
@@ -628,8 +648,15 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const { pieces, color, difficulty, rootMoves } = e.data;
   try {
     const board = Board.deserialize(pieces);
-    const move = iterativeSearch(board, color, difficulty, rootMoves);
-    const resp: WorkerResponse = { type: 'result', fromPos: move.fromPos, to: move.to, score: move.rawScore };
+    const result = iterativeSearch(board, color, difficulty, rootMoves);
+    const resp: WorkerResponse = {
+      type: 'result',
+      fromPos: result.best.fromPos,
+      to: result.best.to,
+      score: result.best.rawScore,
+      completedDepth: result.completedDepth,
+      depthResults: result.depthResults,
+    };
     self.postMessage(resp);
   } catch (err) {
     const resp: WorkerResponse = { type: 'error', error: String(err) };

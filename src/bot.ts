@@ -94,8 +94,32 @@ export class Bot {
       throw new Error(reason ? String(reason.reason) : 'No worker returned a move');
     }
 
-    results.sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity));
-    return results[0];
+    const completedDepths = results
+      .map(r => r.completedDepth)
+      .filter((d): d is number => typeof d === 'number' && d > 0);
+    const commonDepth = completedDepths.length > 0 ? Math.min(...completedDepths) : 1;
+
+    const comparable = results
+      .map((r) => {
+        const atDepth = r.depthResults?.find(d => d.depth === commonDepth);
+        return {
+          resp: r,
+          fromPos: atDepth?.fromPos ?? r.fromPos!,
+          to: atDepth?.to ?? r.to!,
+          score: atDepth?.score ?? (r.score ?? -Infinity),
+        };
+      });
+
+    comparable.sort((a, b) => b.score - a.score);
+    const best = comparable[0];
+    return {
+      type: 'result',
+      fromPos: best.fromPos,
+      to: best.to,
+      score: best.score,
+      completedDepth: commonDepth,
+      depthResults: best.resp.depthResults,
+    };
   }
 
   async pickMove(board: Board): Promise<{ piece: Piece; to: Position3D }> {
