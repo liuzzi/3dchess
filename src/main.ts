@@ -8,11 +8,13 @@ import { Bot } from './bot';
 import type { WorkerResponse } from './botWorker';
 import { Network } from './network';
 import * as THREE from 'three';
-import { Piece, PieceColor, Position3D, posKey, GameMode, SetupMode, boardToWorld } from './types';
+import { Piece, PieceColor, PieceType, Position3D, posKey, GameMode, SetupMode, boardToWorld } from './types';
+import { getLegalMoves, isKingInCheck } from './movement';
 import { playAiThinkTick, playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
 import { setupMenu, type MenuControllerHandle } from './menuController';
 import { computeHoverThreatPreview, computeThreatLinesAfterMove } from './threatPreview';
+import { autoPromoteToQueen } from './promotion';
 
 let renderer: Renderer;
 let boardView: BoardView;
@@ -35,12 +37,15 @@ let moveAnimationToken = 0;
 let moveAnimationQueue: Promise<void> = Promise.resolve();
 let botTurnToken = 0;
 let lastAiFxBeepAt = 0;
+let aiThinkingDepthArrowHoldUntil = 0;
 
 const MOVE_STEP_MS = 500;
 const IMPACT_BURST_MS = 260;
 const CELL_ENTRY_T = 0.5;
 const EASY_BOT_MIN_THINK_MS = 2000;
 const EASY_BOT_MAX_THINK_MS = 3000;
+const AI_FX_DEV_DIAGNOSTICS =
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
 function isStraightStepMove(from: Position3D, to: Position3D): boolean {
   const dx = Math.abs(to.x - from.x);
@@ -78,6 +83,7 @@ function sleep(ms: number): Promise<void> {
 
 function stopAiThinkingFx(): void {
   lastAiFxBeepAt = 0;
+  aiThinkingDepthArrowHoldUntil = 0;
   if (boardView) {
     boardView.clearThinkingLines();
   }
@@ -94,13 +100,108 @@ function enqueueAiThinkingFx(progress: WorkerResponse, turnToken: number): void 
   if (!progress.fromPos || !progress.to) return;
   if (progress.type !== 'progress') return;
   if (progress.progressKind !== 'rootMove' && progress.progressKind !== 'depth') return;
-  boardView.showThinkingLines([{ from: progress.fromPos, to: progress.to }]);
-  boardView.flashThinkingCell(progress.to, 42);
   const now = performance.now();
+  if (progress.progressKind === 'depth') {
+    const pvSets = buildPvSetsForDisplay(progress);
+    boardView.showThinkingLineSets(pvSets.map((line) => line.map(m => ({ from: m.fromPos, to: m.to }))));
+    const ghosts: { pos: Position3D; color: PieceColor; type: PieceType; ply: number; lane?: number }[] = [];
+    for (let lane = 0; lane < pvSets.length; lane++) {
+      const line = pvSets[lane];
+      const sim = game.board.clone();
+      for (let i = 0; i < line.length; i++) {
+        const step = line[i];
+        const piece = sim.getPieceAt(step.fromPos);
+        if (!piece) break;
+        sim.applyMove(piece, step.to);
+        autoPromoteToQueen(piece);
+        ghosts.push({ pos: { ...piece.position }, color: piece.color, type: piece.type, ply: i, lane });
+      }
+    }
+    boardView.showThinkingGhosts(ghosts);
+    aiThinkingDepthArrowHoldUntil = now + 320;
+  } else {
+    // Root updates arrive very frequently; don't immediately overwrite PV subtree arrows.
+    if (now >= aiThinkingDepthArrowHoldUntil) {
+      boardView.showThinkingLines([{ from: progress.fromPos, to: progress.to }]);
+        const moved = game.board.getPieceAt(progress.fromPos);
+        boardView.showThinkingGhosts([{
+          pos: progress.to,
+          color: moved?.color ?? PieceColor.Black,
+          type: moved?.type ?? PieceType.Pawn,
+          ply: 0,
+        }]);
+    }
+  }
+  boardView.flashThinkingCell(progress.to, 42);
   if (now - lastAiFxBeepAt > 85) {
     playAiThinkTick();
     lastAiFxBeepAt = now;
   }
+}
+
+function pieceValueForFx(piece: Piece): number {
+  switch (piece.type) {
+    case 'pawn': return 100;
+    case 'knight': return 320;
+    case 'bishop': return 330;
+    case 'rook': return 500;
+    case 'queen': return 900;
+    case 'king': return 20000;
+    default: return 0;
+  }
+}
+
+function buildPvForDisplay(pvLine: { fromPos: Position3D; to: Position3D }[]): { fromPos: Position3D; to: Position3D }[] {
+  if (!game || pvLine.length === 0) return pvLine;
+  if (pvLine.length >= 2) return pvLine;
+
+  // If worker PV is truncated, infer one opponent reply for visualization clarity.
+  const sim = game.board.clone();
+  const first = pvLine[0];
+  const firstPiece = sim.getPieceAt(first.fromPos);
+  if (!firstPiece) return pvLine;
+  sim.applyMove(firstPiece, first.to);
+  autoPromoteToQueen(firstPiece);
+
+  const enemy = firstPiece.color === PieceColor.White ? PieceColor.Black : PieceColor.White;
+
+  let best: { fromPos: Position3D; to: Position3D; score: number } | null = null;
+  for (const piece of sim.getPiecesOfColor(enemy)) {
+    const legal = getLegalMoves(sim, piece);
+    for (const to of legal) {
+      const captured = sim.getPieceAt(to);
+      const applied = sim.applyMove(piece, to);
+      autoPromoteToQueen(piece);
+      const givesCheck = isKingInCheck(sim, piece.color === PieceColor.White ? PieceColor.Black : PieceColor.White);
+      sim.unapplyMove(applied);
+
+      const score =
+        (captured ? pieceValueForFx(captured) * 1.4 - pieceValueForFx(piece) * 0.2 : 0)
+        + (givesCheck ? 160 : 0)
+        + (3.5 - Math.abs(to.x - 3.5)) + (3.5 - Math.abs(to.y - 3.5)) + (3.5 - Math.abs(to.z - 3.5));
+      if (!best || score > best.score) {
+        best = { fromPos: { ...piece.position }, to: { ...to }, score };
+      }
+    }
+  }
+
+  return best ? [first, { fromPos: best.fromPos, to: best.to }] : pvLine;
+}
+
+function buildPvSetsForDisplay(progress: WorkerResponse): { fromPos: Position3D; to: Position3D }[][] {
+  const baseCandidates = (progress.pvCandidates ?? [])
+    .map((c) => c.pvLine)
+    .filter((line) => line.length > 0);
+  if (baseCandidates.length > 0) {
+    return baseCandidates
+      .slice(0, 3)
+      .map((line) => buildPvForDisplay(line));
+  }
+
+  const basePv = (progress.pvLine && progress.pvLine.length > 0)
+    ? progress.pvLine
+    : [{ fromPos: progress.fromPos!, to: progress.to! }];
+  return [buildPvForDisplay(basePv)];
 }
 
 function spawnImpactBurst(pos: Position3D): void {
@@ -518,11 +619,34 @@ async function handleBotTurn(): Promise<void> {
   const statusEl = document.getElementById('game-status')!;
   statusEl.textContent = 'Thinking...';
   const thinkStart = performance.now();
+  const fxDiag = AI_FX_DEV_DIAGNOSTICS && aiThinkingFxEnabled
+    ? {
+      depthEvents: 0,
+      depthEventsWithSubtree: 0,
+      maxPvLen: 0,
+      maxDepth: 0,
+    }
+    : null;
 
   try {
+    const onProgress = aiThinkingFxEnabled
+      ? (progress: WorkerResponse) => {
+        if (fxDiag && progress.type === 'progress' && progress.progressKind === 'depth') {
+          const candidateMax = Math.max(
+            progress.pvLine?.length ?? 0,
+            ...((progress.pvCandidates ?? []).map((c) => c.pvLine.length)),
+          );
+          fxDiag.depthEvents++;
+          if (candidateMax >= 2) fxDiag.depthEventsWithSubtree++;
+          if (candidateMax > fxDiag.maxPvLen) fxDiag.maxPvLen = candidateMax;
+          if ((progress.completedDepth ?? 0) > fxDiag.maxDepth) fxDiag.maxDepth = progress.completedDepth ?? 0;
+        }
+        enqueueAiThinkingFx(progress, turnToken);
+      }
+      : undefined;
     const move = await bot.pickMove(
       game.board,
-      aiThinkingFxEnabled ? (progress) => enqueueAiThinkingFx(progress, turnToken) : undefined,
+      onProgress,
     );
     if (turnToken !== botTurnToken) return;
     if (bot.difficulty === 'easy') {
@@ -547,6 +671,12 @@ async function handleBotTurn(): Promise<void> {
     game.botThinking = false;
     statusEl.textContent = '';
   } finally {
+    if (fxDiag) {
+      const elapsed = Math.round(performance.now() - thinkStart);
+      console.debug(
+        `[AI FX] turn=${turnToken} depthEvents=${fxDiag.depthEvents} depthEventsWithSubtree=${fxDiag.depthEventsWithSubtree} maxPvLen=${fxDiag.maxPvLen} maxDepth=${fxDiag.maxDepth} thinkMs=${elapsed}`,
+      );
+    }
     if (turnToken === botTurnToken) stopAiThinkingFx();
   }
 }

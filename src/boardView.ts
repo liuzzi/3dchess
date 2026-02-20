@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Position3D, posKey, boardToWorld } from './types';
+import { Position3D, PieceColor, PieceType, posKey, boardToWorld } from './types';
 
 const CELL_SIZE = 1;
 
@@ -27,6 +27,7 @@ export class BoardView {
   private dangerPreviewArrows: THREE.Group[] = [];
   private hoverThreatArrows: THREE.Group[] = [];
   private thinkingArrows: THREE.Group[] = [];
+  private thinkingGhosts: THREE.Group[] = [];
   private traversalFlashTimers: Map<string, number> = new Map();
   private thinkingFlashTimers: Map<string, number> = new Map();
 
@@ -476,19 +477,173 @@ export class BoardView {
   }
 
   showThinkingLines(pairs: { from: Position3D; to: Position3D }[]): void {
+    this.showThinkingLineSets([pairs]);
+  }
+
+  showThinkingLineSets(lines: { from: Position3D; to: Position3D }[][]): void {
     this.clearThinkingLines();
-    for (const { from, to } of pairs) {
-      const origin = new THREE.Vector3(...boardToWorld(from));
-      const dest = new THREE.Vector3(...boardToWorld(to));
-      const arrow = this.createArrow(origin, dest, 0xffdd33, 0.45);
-      this.group.add(arrow);
-      this.thinkingArrows.push(arrow);
+    if (lines.length === 0) return;
+    const start = new THREE.Color(0xffdd33);
+    const end = new THREE.Color(0x33e6ff);
+    const maxBranch = Math.max(1, lines.length - 1);
+    for (let branchIdx = 0; branchIdx < lines.length; branchIdx++) {
+      const pairs = lines[branchIdx];
+      const branchDim = branchIdx / maxBranch;
+      const maxIdx = Math.max(1, pairs.length - 1);
+      for (let i = 0; i < pairs.length; i++) {
+        const { from, to } = pairs[i];
+        const origin = new THREE.Vector3(...boardToWorld(from));
+        const dest = new THREE.Vector3(...boardToWorld(to));
+        const t = i / maxIdx;
+        const color = start.clone().lerp(end, t).getHex();
+        const baseOpacity = 0.56 - t * 0.14;
+        const branchPenalty = branchIdx === 0 ? 0 : 0.16 + branchDim * 0.1;
+        const opacity = Math.max(0.24, baseOpacity - branchPenalty);
+        const arrow = this.createArrow(origin, dest, color, opacity);
+        this.group.add(arrow);
+        this.thinkingArrows.push(arrow);
+      }
     }
   }
 
   clearThinkingLines(): void {
     for (const arrow of this.thinkingArrows) this.disposeArrow(arrow);
     this.thinkingArrows = [];
+    this.clearThinkingGhosts();
+  }
+
+  showThinkingGhosts(ghosts: { pos: Position3D; color: PieceColor; type: PieceType; ply: number; lane?: number }[]): void {
+    this.clearThinkingGhosts();
+    const maxPly = Math.max(1, ghosts.reduce((m, g) => Math.max(m, g.ply), 0));
+    for (const ghost of ghosts) {
+      const [x, y, z] = boardToWorld(ghost.pos);
+      const t = ghost.ply / maxPly;
+      const mesh = this.createThinkingGhostPiece(ghost.type, ghost.color, t);
+      const laneOffset = (ghost.lane ?? 0) * 0.04;
+      mesh.position.set(x, y + 0.18 + laneOffset, z);
+      mesh.renderOrder = 12;
+      this.group.add(mesh);
+      this.thinkingGhosts.push(mesh);
+    }
+  }
+
+  private clearThinkingGhosts(): void {
+    for (const ghost of this.thinkingGhosts) {
+      ghost.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m) => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+      });
+      this.group.remove(ghost);
+    }
+    this.thinkingGhosts = [];
+  }
+
+  private createThinkingGhostPiece(type: PieceType, color: PieceColor, plyT: number): THREE.Group {
+    const group = new THREE.Group();
+    const bodyHex = color === PieceColor.White ? 0xf0e6d2 : 0x2a2a3e;
+    const tint = new THREE.Color(0xffdd33).lerp(new THREE.Color(0x33e6ff), plyT);
+    const baseColor = new THREE.Color(bodyHex).lerp(tint, 0.3);
+    const outlineColor = color === PieceColor.White ? 0xffffff : 0x111111;
+
+    const makeBodyMat = () => new THREE.MeshStandardMaterial({
+      color: baseColor.getHex(),
+      metalness: 0.28,
+      roughness: 0.62,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+    });
+    const makeOutlineMat = () => new THREE.MeshBasicMaterial({
+      color: outlineColor,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+    });
+
+    const addOutlinedPart = (
+      geo: THREE.BufferGeometry,
+      configure?: (mesh: THREE.Mesh) => void,
+    ): void => {
+      const mainPart = new THREE.Mesh(geo, makeBodyMat());
+      configure?.(mainPart);
+      group.add(mainPart);
+
+      const outlinePart = new THREE.Mesh(geo.clone(), makeOutlineMat());
+      outlinePart.scale.setScalar(1.1);
+      configure?.(outlinePart);
+      group.add(outlinePart);
+    };
+
+    let mainGeo: THREE.BufferGeometry;
+    let height = 0.4;
+    switch (type) {
+      case PieceType.King: {
+        mainGeo = new THREE.CylinderGeometry(0.12, 0.18, 0.45, 8);
+        height = 0.45;
+        addOutlinedPart(new THREE.BoxGeometry(0.04, 0.14, 0.04), (mesh) => {
+          mesh.position.y = 0.3;
+        });
+        addOutlinedPart(new THREE.BoxGeometry(0.1, 0.04, 0.04), (mesh) => {
+          mesh.position.y = 0.28;
+        });
+        break;
+      }
+      case PieceType.Queen: {
+        mainGeo = new THREE.CylinderGeometry(0.1, 0.18, 0.42, 8);
+        height = 0.42;
+        addOutlinedPart(new THREE.SphereGeometry(0.06, 8, 8), (mesh) => {
+          mesh.position.y = 0.27;
+        });
+        break;
+      }
+      case PieceType.Rook: {
+        mainGeo = new THREE.CylinderGeometry(0.16, 0.18, 0.32, 8);
+        height = 0.32;
+        addOutlinedPart(new THREE.CylinderGeometry(0.18, 0.16, 0.06, 8), (mesh) => {
+          mesh.position.y = 0.19;
+        });
+        break;
+      }
+      case PieceType.Bishop: {
+        mainGeo = new THREE.ConeGeometry(0.16, 0.4, 8);
+        height = 0.4;
+        addOutlinedPart(new THREE.SphereGeometry(0.04, 6, 6), (mesh) => {
+          mesh.position.y = 0.22;
+        });
+        break;
+      }
+      case PieceType.Knight: {
+        mainGeo = new THREE.ConeGeometry(0.16, 0.36, 8);
+        height = 0.36;
+        addOutlinedPart(new THREE.BoxGeometry(0.1, 0.12, 0.16), (mesh) => {
+          mesh.position.set(0.06, 0.14, 0);
+          mesh.rotation.z = -0.4;
+        });
+        break;
+      }
+      case PieceType.Pawn: {
+        mainGeo = new THREE.CylinderGeometry(0.06, 0.14, 0.25, 8);
+        height = 0.25;
+        addOutlinedPart(new THREE.SphereGeometry(0.07, 8, 8), (mesh) => {
+          mesh.position.y = 0.16;
+        });
+        break;
+      }
+    }
+
+    addOutlinedPart(mainGeo);
+    addOutlinedPart(new THREE.CylinderGeometry(0.2, 0.2, 0.04, 12), (mesh) => {
+      mesh.position.y = -height / 2;
+    });
+    group.scale.setScalar(1);
+    return group;
   }
 
   flashThinkingCell(pos: Position3D, durationMs = 90): void {

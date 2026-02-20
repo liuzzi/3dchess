@@ -88,6 +88,8 @@ interface DepthResult {
   fromPos: Position3D;
   to: Position3D;
   score: number;
+  pvLine?: RootMove[];
+  pvCandidates?: { pvLine: RootMove[]; score: number }[];
 }
 
 type ProgressMode = 'depth' | 'detailed';
@@ -773,6 +775,53 @@ function searchAtDepth(
   return scored;
 }
 
+function extractPrincipalVariation(board: Board, toMove: PieceColor, maxPlies = 6): RootMove[] {
+  const pv: RootMove[] = [];
+  const appliedMoves: ReturnType<Board['applyMove']>[] = [];
+  let side = toMove;
+  try {
+    for (let i = 0; i < maxPlies; i++) {
+      const tt = transpositionTable.get(hashBoard(board, side));
+      if (!tt?.bestMoveKey) break;
+      const moves = getAllMoves(board, side);
+      const best = moves.find(m => moveKeyOf(m) === tt.bestMoveKey);
+      if (!best) break;
+      pv.push({ fromPos: { ...best.piece.position }, to: { ...best.to } });
+      const applied = board.applyMove(best.piece, best.to);
+      appliedMoves.push(applied);
+      autoPromoteToQueen(best.piece);
+      side = getOpponent(side);
+    }
+  } finally {
+    for (let i = appliedMoves.length - 1; i >= 0; i--) {
+      board.unapplyMove(appliedMoves[i]);
+    }
+  }
+  return pv;
+}
+
+function buildDepthPvLine(
+  board: Board,
+  color: PieceColor,
+  best: ScoredMove,
+  maxPlies = 6,
+): RootMove[] {
+  const rootMove: RootMove = {
+    fromPos: { ...best.fromPos },
+    to: { ...best.to },
+  };
+  if (maxPlies <= 1) return [rootMove];
+
+  const sim = board.clone();
+  const mover = sim.getPieceAt(rootMove.fromPos);
+  if (!mover) return [rootMove];
+  sim.applyMove(mover, rootMove.to);
+  autoPromoteToQueen(mover);
+
+  const tail = extractPrincipalVariation(sim, getOpponent(color), maxPlies - 1);
+  return [rootMove, ...tail];
+}
+
 function computeAdaptiveTimeLimit(board: Board, color: PieceColor, difficulty: Difficulty): number {
   const base = TIME_LIMIT[difficulty];
   if (base <= 0) return 0;
@@ -850,7 +899,7 @@ function iterativeSearch(
   difficulty: Difficulty,
   rootMoves?: RootMove[],
   progressMode: ProgressMode = 'depth',
-  onDepthCompleted?: (result: DepthResult) => void,
+  onProgress?: (kind: 'depth' | 'rootMove', result: DepthResult) => void,
 ): { best: ScoredMove; completedDepth: number; depthResults: DepthResult[] } {
   const noisy = difficulty === 'easy';
   const maxDepth = MAX_DEPTH[difficulty];
@@ -882,13 +931,13 @@ function iterativeSearch(
   let lastProgressEmitAt = 0;
 
   const emitDetailedProgress = (result: DepthResult): void => {
-    if (progressMode !== 'detailed' || !onDepthCompleted) return;
+    if (progressMode !== 'detailed' || !onProgress) return;
     // Throttle progress messages to keep animation cheap.
     progressEmitCount++;
     const now = Date.now();
     if (progressEmitCount % 4 !== 0 && now - lastProgressEmitAt < 28) return;
     lastProgressEmitAt = now;
-    onDepthCompleted(result);
+    onProgress('rootMove', result);
   };
 
   for (let depth = 1; depth <= maxDepth; depth++) {
@@ -945,9 +994,29 @@ function iterativeSearch(
       bestResult = result;
       const best = result[0];
       completedDepth = depth;
-      const depthResult: DepthResult = { depth, fromPos: best.fromPos, to: best.to, score: best.rawScore };
+      const rootHash = hashBoard(board, color);
+      const seededBestKey = moveKey(best.fromPos, best.to);
+      const seeded = transpositionTable.get(rootHash);
+      if (!seeded || seeded.depth <= depth) {
+        transpositionTable.set(rootHash, {
+          depth,
+          score: best.rawScore,
+          flag: 'exact',
+          bestMoveKey: seededBestKey,
+        });
+      }
+      const depthResult: DepthResult = {
+        depth,
+        fromPos: best.fromPos,
+        to: best.to,
+        score: best.rawScore,
+        pvLine: buildDepthPvLine(board, color, best, 6),
+        pvCandidates: result
+          .slice(0, 3)
+          .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 6), score: m.rawScore })),
+      };
       depthResults.push(depthResult);
-      onDepthCompleted?.(depthResult);
+      onProgress?.('depth', depthResult);
       pvMoveKey = moveKey(best.fromPos, best.to);
       previousScore = best.rawScore;
 
@@ -963,12 +1032,18 @@ function iterativeSearch(
         if (!bestResult) {
           bestResult = guaranteedDepthOne(board, color, noisy, restrictedRootMoves);
           completedDepth = 1;
-          depthResults.push({
+          const depthResult: DepthResult = {
             depth: 1,
             fromPos: bestResult[0].fromPos,
             to: bestResult[0].to,
             score: bestResult[0].rawScore,
-          });
+            pvLine: buildDepthPvLine(board, color, bestResult[0], 4),
+            pvCandidates: bestResult
+              .slice(0, 3)
+              .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 4), score: m.rawScore })),
+          };
+          depthResults.push(depthResult);
+          onProgress?.('depth', depthResult);
         }
         break;
       }
@@ -997,6 +1072,8 @@ export interface WorkerResponse {
   progressKind?: 'depth' | 'rootMove';
   fromPos?: Position3D;
   to?: Position3D;
+  pvLine?: RootMove[];
+  pvCandidates?: { pvLine: RootMove[]; score: number }[];
   score?: number;
   completedDepth?: number;
   depthResults?: DepthResult[];
@@ -1033,12 +1110,14 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
       return;
     }
     const board = Board.deserialize(pieces);
-    const result = iterativeSearch(board, color, difficulty, rootMoves, progressMode ?? 'depth', (depthResult) => {
+    const result = iterativeSearch(board, color, difficulty, rootMoves, progressMode ?? 'depth', (kind, depthResult) => {
       const progress: WorkerResponse = {
         type: 'progress',
-        progressKind: progressMode === 'detailed' ? 'rootMove' : 'depth',
+        progressKind: kind,
         fromPos: depthResult.fromPos,
         to: depthResult.to,
+        pvLine: depthResult.pvLine,
+        pvCandidates: depthResult.pvCandidates,
         score: depthResult.score,
         completedDepth: depthResult.depth,
       };
