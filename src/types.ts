@@ -58,9 +58,11 @@ export interface HistoryEntry {
 }
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
+export type SetupMode = 'classic' | 'barricade';
 
 export interface GameMode {
   type: 'local' | 'bot' | 'online';
+  setup?: SetupMode;
   difficulty?: Difficulty;
   localColor?: PieceColor;
 }

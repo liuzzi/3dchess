@@ -33,6 +33,7 @@ export class Game {
   mode: GameMode = { type: 'local' };
   history: HistoryEntry[] = [];
   lastMove: { from: Position3D; to: Position3D } | null = null;
+  private pendingPostMovePiece: Piece | null = null;
 
   private listeners: GameEventCallback[] = [];
 
@@ -42,6 +43,7 @@ export class Game {
 
   setMode(mode: GameMode): void {
     this.mode = mode;
+    this.board.reset(this.mode.setup ?? 'classic');
   }
 
   get selectedPiece(): Piece | null {
@@ -65,7 +67,7 @@ export class Game {
   }
 
   reset(): void {
-    this.board.reset();
+    this.board.reset(this.mode.setup ?? 'classic');
     this.currentTurn = PieceColor.White;
     this._selectedPiece = null;
     this._validMoves = [];
@@ -76,6 +78,7 @@ export class Game {
     this.botThinking = false;
     this.history = [];
     this.lastMove = null;
+    this.pendingPostMovePiece = null;
     this.emit({ type: 'reset' });
   }
 
@@ -151,6 +154,7 @@ export class Game {
     this.gameOver = false;
     this.awaitingPromotion = null;
     this.botThinking = false;
+    this.pendingPostMovePiece = null;
   }
 
   canUndo(): boolean {
@@ -158,6 +162,7 @@ export class Game {
       this.history.length > 0 &&
       !this.gameOver &&
       !this.awaitingPromotion &&
+      !this.pendingPostMovePiece &&
       !this.botThinking &&
       this.mode.type !== 'online'
     );
@@ -176,6 +181,7 @@ export class Game {
     }
 
     this.emit({ type: 'undo', data: { lastMove: this.lastMove } });
+    this.evaluateCurrentPosition();
   }
 
   private executeMove(piece: Piece, to: Position3D): void {
@@ -195,6 +201,13 @@ export class Game {
 
     this.emit({ type: 'move', data: { piece, from, to, captured } });
     this.deselect();
+    this.pendingPostMovePiece = piece;
+  }
+
+  finalizeMove(): void {
+    const piece = this.pendingPostMovePiece;
+    if (!piece) return;
+    this.pendingPostMovePiece = null;
 
     if (isPromotionSquare(piece)) {
       const isBotPiece = this.mode.type === 'bot' && piece.color === PieceColor.Black;
@@ -239,6 +252,13 @@ export class Game {
   private endTurn(): void {
     this.currentTurn = this.currentTurn === PieceColor.White ? PieceColor.Black : PieceColor.White;
     this.emit({ type: 'turnChange', data: { turn: this.currentTurn } });
+
+    this.evaluateCurrentPosition();
+  }
+
+  private evaluateCurrentPosition(): void {
+    this.gameOver = false;
+    this.botThinking = false;
 
     if (isKingInCheck(this.board, this.currentTurn)) {
       const checkPath = getCheckPath(this.board, this.currentTurn);

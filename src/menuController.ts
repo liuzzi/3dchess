@@ -1,8 +1,8 @@
-import { Difficulty, PieceColor } from './types';
+import { Difficulty, PieceColor, SetupMode } from './types';
 import { playMenuClick, playMenuConfirm } from './sound';
 
 type MainMode = 'local' | 'bot' | 'online';
-type ExpandableMode = Exclude<MainMode, 'local'>;
+type ExpandableMode = MainMode;
 
 interface SubOption {
   label: string;
@@ -12,24 +12,69 @@ interface SubOption {
 }
 
 export interface MenuControllerActions {
-  startLocal: () => void;
-  startBot: (difficulty: Difficulty) => void;
-  startOnlineHost: (localColor: PieceColor) => void;
+  startLocal: (setup: SetupMode) => void;
+  startBot: (difficulty: Difficulty, setup: SetupMode) => void;
+  startOnlineHost: (localColor: PieceColor, setup: SetupMode) => void;
 }
 
-export function setupMenu(actions: MenuControllerActions): void {
+export interface MenuControllerHandle {
+  resetToMainMenu: () => void;
+}
+
+export function setupMenu(actions: MenuControllerActions): MenuControllerHandle {
   const menuScreen = document.getElementById('menu-screen');
   const cubeContainer = document.getElementById('menu-cubes');
   const submenu = document.getElementById('menu-submenu');
   const subCubeStack = document.getElementById('menu-subcubes');
   const backBtn = document.getElementById('menu-back-btn');
-  if (!menuScreen || !cubeContainer || !submenu || !subCubeStack || !backBtn) return;
+  if (!menuScreen || !cubeContainer || !submenu || !subCubeStack || !backBtn) {
+    return {
+      resetToMainMenu: () => {},
+    };
+  }
 
   const cubes = Array.from(cubeContainer.querySelectorAll<HTMLButtonElement>('.cube-wrapper[data-mode]'));
   const bgLayers = Array.from(menuScreen.querySelectorAll<HTMLElement>('.menu-bg-layer'));
 
   let expandedMode: ExpandableMode | null = null;
   let transitioning = false;
+  let selectedSetup: SetupMode = 'classic';
+
+  const ensureGameModeControl = (): HTMLSelectElement => {
+    const existing = document.getElementById('menu-game-mode-select') as HTMLSelectElement | null;
+    if (existing) return existing;
+
+    const control = document.createElement('div');
+    control.id = 'menu-game-mode-control';
+    control.className = 'menu-game-mode-control';
+
+    const label = document.createElement('label');
+    label.htmlFor = 'menu-game-mode-select';
+    label.textContent = 'Game mode';
+
+    const select = document.createElement('select');
+    select.id = 'menu-game-mode-select';
+
+    const classic = document.createElement('option');
+    classic.value = 'classic';
+    classic.textContent = 'Classic';
+    select.appendChild(classic);
+
+    const barricade = document.createElement('option');
+    barricade.value = 'barricade';
+    barricade.textContent = 'Barricade';
+    select.appendChild(barricade);
+
+    select.value = selectedSetup;
+    select.addEventListener('change', () => {
+      selectedSetup = select.value as SetupMode;
+      playMenuClick();
+    });
+
+    control.append(label, select);
+    submenu.insertBefore(control, subCubeStack);
+    return select;
+  };
 
   const createCubeBody = (label: string, detail: string): HTMLDivElement => {
     const cube = document.createElement('div');
@@ -70,17 +115,36 @@ export function setupMenu(actions: MenuControllerActions): void {
     }, 260);
   };
 
+  const resetToMainMenu = (): void => {
+    expandedMode = null;
+    transitioning = false;
+    cubeContainer.classList.remove('is-expanded');
+    backBtn.classList.remove('is-visible');
+    submenu.classList.remove('is-active');
+    subCubeStack.replaceChildren();
+    cubes.forEach((cube) => {
+      cube.classList.remove('is-hidden', 'is-centered', 'is-selected');
+    });
+  };
+
   const renderSubOptions = (mode: ExpandableMode): void => {
-    const options: SubOption[] = mode === 'bot'
+    const setupSelect = ensureGameModeControl();
+    setupSelect.value = selectedSetup;
+
+    const options: SubOption[] = mode === 'local'
       ? [
-          { label: 'Easy', detail: 'Calm Play', toneClass: 'tone-soft', onSelect: () => actions.startBot('easy') },
-          { label: 'Medium', detail: 'Balanced', toneClass: 'tone-mid', onSelect: () => actions.startBot('medium') },
-          { label: 'Hard', detail: 'No Mercy', toneClass: 'tone-hard', onSelect: () => actions.startBot('hard') },
+          { label: 'Start', detail: 'Same Device', toneClass: 'tone-soft', onSelect: () => actions.startLocal(selectedSetup) },
         ]
-      : [
-          { label: 'Play White', detail: 'First Move', toneClass: 'tone-white', onSelect: () => actions.startOnlineHost(PieceColor.White) },
-          { label: 'Play Black', detail: 'Counterplay', toneClass: 'tone-black', onSelect: () => actions.startOnlineHost(PieceColor.Black) },
-        ];
+      : mode === 'bot'
+        ? [
+            { label: 'Easy', detail: 'Calm Play', toneClass: 'tone-soft', onSelect: () => actions.startBot('easy', selectedSetup) },
+            { label: 'Medium', detail: 'Balanced', toneClass: 'tone-mid', onSelect: () => actions.startBot('medium', selectedSetup) },
+            { label: 'Hard', detail: 'No Mercy', toneClass: 'tone-hard', onSelect: () => actions.startBot('hard', selectedSetup) },
+          ]
+        : [
+            { label: 'Play White', detail: 'First Move', toneClass: 'tone-white', onSelect: () => actions.startOnlineHost(PieceColor.White, selectedSetup) },
+            { label: 'Play Black', detail: 'Counterplay', toneClass: 'tone-black', onSelect: () => actions.startOnlineHost(PieceColor.Black, selectedSetup) },
+          ];
 
     subCubeStack.replaceChildren();
     options.forEach((option, index) => {
@@ -121,13 +185,6 @@ export function setupMenu(actions: MenuControllerActions): void {
       if (!modeType || transitioning) return;
       playMenuClick();
 
-      if (modeType === 'local') {
-        playMenuConfirm();
-        cube.classList.add('is-activating', 'is-selected');
-        window.setTimeout(() => actions.startLocal(), 220);
-        return;
-      }
-
       if (expandedMode === modeType) {
         collapseExpanded();
         return;
@@ -160,4 +217,6 @@ export function setupMenu(actions: MenuControllerActions): void {
       layer.style.transform = 'translate3d(0, 0, 0)';
     });
   });
+
+  return { resetToMainMenu };
 }

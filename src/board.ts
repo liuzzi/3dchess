@@ -1,4 +1,4 @@
-import { Piece, PieceColor, PieceType, Position3D, posKey } from './types';
+import { Piece, PieceColor, PieceType, Position3D, SetupMode, posKey } from './types';
 
 const BACK_RANK: PieceType[] = [
   PieceType.Rook, PieceType.Knight, PieceType.Bishop, PieceType.Queen,
@@ -14,22 +14,61 @@ export class Board {
     this.reset();
   }
 
-  reset(): void {
+  reset(setup: SetupMode = 'classic'): void {
     this.pieces = [];
     this.pieceMap.clear();
 
     const centerZ = 3; // layer 4 (1-indexed) — center of cube
 
-    // White: back rank at y=0, pawns at y=1, on center layer
+    // White back rank on center layer.
     for (let x = 0; x < 8; x++) {
       this.addPiece({ type: BACK_RANK[x], color: PieceColor.White, position: { x, y: 0, z: centerZ }, hasMoved: false });
-      this.addPiece({ type: PieceType.Pawn, color: PieceColor.White, position: { x, y: 1, z: centerZ }, hasMoved: false });
     }
 
-    // Black: back rank at y=7, pawns at y=6, same center layer — facing White across y
+    // Black back rank on center layer.
     for (let x = 0; x < 8; x++) {
       this.addPiece({ type: BACK_RANK[x], color: PieceColor.Black, position: { x, y: 7, z: centerZ }, hasMoved: false });
+    }
+
+    // Classic pawn rows on center layer.
+    for (let x = 0; x < 8; x++) {
+      this.addPiece({ type: PieceType.Pawn, color: PieceColor.White, position: { x, y: 1, z: centerZ }, hasMoved: false });
       this.addPiece({ type: PieceType.Pawn, color: PieceColor.Black, position: { x, y: 6, z: centerZ }, hasMoved: false });
+    }
+
+    if (setup !== 'barricade') return;
+
+    // Barricade adds extra pawn rows around main pieces.
+    const whiteBarricadeRows = [
+      { y: 0, z: 4 }, // L5,1
+      { y: 1, z: 4 }, // L5,2
+      { y: 0, z: 2 }, // L3,1
+      { y: 1, z: 2 }, // L3,2
+    ];
+    const blackBarricadeRows = [
+      { y: 7, z: 4 }, // L5,8
+      { y: 6, z: 4 }, // L5,7
+      { y: 7, z: 2 }, // L3,8
+      { y: 6, z: 2 }, // L3,7
+    ];
+
+    for (let x = 0; x < 8; x++) {
+      for (const row of whiteBarricadeRows) {
+        this.addPiece({
+          type: PieceType.Pawn,
+          color: PieceColor.White,
+          position: { x, y: row.y, z: row.z },
+          hasMoved: false,
+        });
+      }
+      for (const row of blackBarricadeRows) {
+        this.addPiece({
+          type: PieceType.Pawn,
+          color: PieceColor.Black,
+          position: { x, y: row.y, z: row.z },
+          hasMoved: false,
+        });
+      }
     }
   }
 

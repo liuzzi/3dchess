@@ -73,6 +73,10 @@ export function playMove(): void {
   playTone(520, 0.08, 'sine', 0.06);
 }
 
+export function playStep(): void {
+  playTone(500, 0.06, 'triangle', 0.05);
+}
+
 export function playCapture(): void {
   playNoise(0.15, 0.12);
   playTone(260, 0.2, 'sawtooth', 0.08);

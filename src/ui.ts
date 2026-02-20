@@ -21,8 +21,8 @@ const PROMO_CHOICES: { type: PieceType; label: string }[] = [
 
 interface UIOptions {
   onMoveHover?: (pos: Position3D | null) => void;
-  onAttackPreviewStart?: () => void;
-  onAttackPreviewEnd?: () => void;
+  onAttackPreviewToggle?: (enabled: boolean) => void;
+  onMyThreatsToggle?: (enabled: boolean) => void;
 }
 
 export class UI {
@@ -36,13 +36,13 @@ export class UI {
   private movePanelEl: HTMLElement | null;
   private movePanelEmptyEl: HTMLElement | null;
   private moveOptionsEl: HTMLElement | null;
-  private attackPreviewBtn: HTMLButtonElement | null;
+  private attackPreviewCheckbox: HTMLInputElement | null;
+  private myThreatsCheckbox: HTMLInputElement | null;
   private onMoveHover: (pos: Position3D | null) => void;
-  private onAttackPreviewStart: () => void;
-  private onAttackPreviewEnd: () => void;
+  private onAttackPreviewToggle: (enabled: boolean) => void;
+  private onMyThreatsToggle: (enabled: boolean) => void;
   private moveOptionButtons = new Map<string, HTMLButtonElement>();
   private hoveredMoveKey: string | null = null;
-  private attackPreviewHolding = false;
   private ac = new AbortController();
 
   constructor(
@@ -60,10 +60,11 @@ export class UI {
     this.movePanelEl = document.getElementById('move-panel');
     this.movePanelEmptyEl = document.getElementById('move-panel-empty');
     this.moveOptionsEl = document.getElementById('move-options');
-    this.attackPreviewBtn = document.getElementById('attack-preview-btn') as HTMLButtonElement | null;
+    this.attackPreviewCheckbox = document.getElementById('attack-preview-checkbox') as HTMLInputElement | null;
+    this.myThreatsCheckbox = document.getElementById('my-threats-checkbox') as HTMLInputElement | null;
     this.onMoveHover = options?.onMoveHover ?? (() => {});
-    this.onAttackPreviewStart = options?.onAttackPreviewStart ?? (() => {});
-    this.onAttackPreviewEnd = options?.onAttackPreviewEnd ?? (() => {});
+    this.onAttackPreviewToggle = options?.onAttackPreviewToggle ?? (() => {});
+    this.onMyThreatsToggle = options?.onMyThreatsToggle ?? (() => {});
 
     const signal = this.ac.signal;
     this.newGameBtn.addEventListener('click', () => {
@@ -76,6 +77,7 @@ export class UI {
     this.setupFrostingSlider();
     this.setupOutlineBrightnessSlider();
     this.setupAttackPreviewButton();
+    this.setupMyThreatsButton();
     this.updateTurn();
     this.updateCaptured();
     this.updateUndoBtn();
@@ -147,65 +149,31 @@ export class UI {
   }
 
   private setupAttackPreviewButton(): void {
-    const btn = this.attackPreviewBtn;
-    if (!btn) return;
-
-    const startHold = (pointerId?: number): void => {
-      if (this.attackPreviewHolding) return;
-      this.attackPreviewHolding = true;
-      btn.classList.add('is-holding');
-      if (pointerId !== undefined) {
-        try {
-          btn.setPointerCapture(pointerId);
-        } catch {
-          // Ignore capture failures for unsupported/legacy pointer scenarios.
-        }
-      }
-      this.onAttackPreviewStart();
-    };
-
-    const endHold = (pointerId?: number): void => {
-      if (!this.attackPreviewHolding) return;
-      this.attackPreviewHolding = false;
-      btn.classList.remove('is-holding');
-      if (pointerId !== undefined && btn.hasPointerCapture(pointerId)) {
-        btn.releasePointerCapture(pointerId);
-      }
-      this.onAttackPreviewEnd();
-    };
-
+    const checkbox = this.attackPreviewCheckbox;
+    if (!checkbox) return;
     const signal = this.ac.signal;
-    btn.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      startHold(e.pointerId);
+    checkbox.addEventListener('change', () => {
+      this.onAttackPreviewToggle(checkbox.checked);
     }, { signal });
-    btn.addEventListener('pointerup', (e) => {
-      endHold(e.pointerId);
-    }, { signal });
-    btn.addEventListener('pointercancel', (e) => {
-      endHold(e.pointerId);
-    }, { signal });
-    btn.addEventListener('lostpointercapture', () => {
-      endHold();
-    }, { signal });
+  }
 
-    btn.addEventListener('keydown', (e) => {
-      if (e.repeat) return;
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        startHold();
-      }
+  setAttackPreviewEnabled(enabled: boolean): void {
+    if (!this.attackPreviewCheckbox) return;
+    this.attackPreviewCheckbox.checked = enabled;
+  }
+
+  private setupMyThreatsButton(): void {
+    const checkbox = this.myThreatsCheckbox;
+    if (!checkbox) return;
+    const signal = this.ac.signal;
+    checkbox.addEventListener('change', () => {
+      this.onMyThreatsToggle(checkbox.checked);
     }, { signal });
-    btn.addEventListener('keyup', (e) => {
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault();
-        endHold();
-      }
-    }, { signal });
-    btn.addEventListener('blur', () => {
-      endHold();
-    }, { signal });
+  }
+
+  setMyThreatsEnabled(enabled: boolean): void {
+    if (!this.myThreatsCheckbox) return;
+    this.myThreatsCheckbox.checked = enabled;
   }
 
   private formatPos(pos: Position3D): string {

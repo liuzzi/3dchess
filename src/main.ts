@@ -6,11 +6,12 @@ import { Game } from './game';
 import { UI } from './ui';
 import { Bot } from './bot';
 import { Network } from './network';
-import { Piece, PieceColor, Position3D, posKey, GameMode } from './types';
+import * as THREE from 'three';
+import { Piece, PieceColor, Position3D, posKey, GameMode, SetupMode, boardToWorld } from './types';
 import { getLegalMoves } from './movement';
-import { playMove, playCapture, playCheck, playCheckmate } from './sound';
+import { playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
-import { setupMenu } from './menuController';
+import { setupMenu, type MenuControllerHandle } from './menuController';
 import { computeHoverThreatPreview, computeThreatLinesAfterMove } from './threatPreview';
 
 let renderer: Renderer;
@@ -21,12 +22,177 @@ let interaction: Interaction;
 let ui: UI;
 let bot: Bot | null = null;
 let network: Network | null = null;
+let menuController: MenuControllerHandle | null = null;
 let menuHideTimeoutId: number | null = null;
 let onlineFlowCancelled = false;
 let hoverPreviewTargetKey: string | null = null;
 let hoverPreviewRafPending = false;
 let queuedHoverPos: Position3D | null = null;
 let attackPreviewActive = false;
+let myThreatsActive = false;
+let isAnimatingMove = false;
+let moveAnimationToken = 0;
+let moveAnimationQueue: Promise<void> = Promise.resolve();
+
+const MOVE_STEP_MS = 110;
+const IMPACT_BURST_MS = 260;
+const EASY_BOT_MIN_THINK_MS = 2000;
+const EASY_BOT_MAX_THINK_MS = 3000;
+
+function isStraightStepMove(from: Position3D, to: Position3D): boolean {
+  const dx = Math.abs(to.x - from.x);
+  const dy = Math.abs(to.y - from.y);
+  const dz = Math.abs(to.z - from.z);
+  const stepCount = Math.max(dx, dy, dz);
+  return [dx, dy, dz].every((d) => d === 0 || d === stepCount);
+}
+
+function buildStepPath(from: Position3D, to: Position3D): Position3D[] {
+  if (!isStraightStepMove(from, to)) return [{ ...to }];
+
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dz = to.z - from.z;
+  const stepCount = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+  const sx = Math.sign(dx);
+  const sy = Math.sign(dy);
+  const sz = Math.sign(dz);
+
+  const path: Position3D[] = [];
+  for (let i = 1; i <= stepCount; i++) {
+    path.push({
+      x: from.x + sx * i,
+      y: from.y + sy * i,
+      z: from.z + sz * i,
+    });
+  }
+  return path;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function spawnImpactBurst(pos: Position3D): void {
+  const [x, y, z] = boardToWorld(pos);
+  const center = new THREE.Vector3(x, y, z);
+  const group = new THREE.Group();
+  const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; material: THREE.MeshBasicMaterial }[] = [];
+
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xffb347,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const flashGeo = new THREE.SphereGeometry(0.12, 12, 12);
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+  flash.position.copy(center);
+  group.add(flash);
+
+  for (let i = 0; i < 14; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: i % 3 === 0 ? 0xff4d00 : 0xffa000,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const geo = new THREE.SphereGeometry(0.03 + Math.random() * 0.03, 8, 8);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(center);
+    const velocity = new THREE.Vector3(
+      (Math.random() - 0.5) * 2,
+      (Math.random() - 0.2) * 2.2,
+      (Math.random() - 0.5) * 2,
+    );
+    particles.push({ mesh, velocity, material: mat });
+    group.add(mesh);
+  }
+
+  renderer.scene.add(group);
+  const start = performance.now();
+
+  const animate = (now: number): void => {
+    const elapsed = now - start;
+    const t = Math.min(1, elapsed / IMPACT_BURST_MS);
+    const fade = 1 - t;
+
+    flash.scale.setScalar(1 + t * 1.8);
+    flashMat.opacity = 0.9 * fade;
+
+    for (const p of particles) {
+      p.mesh.position.set(
+        center.x + p.velocity.x * t,
+        center.y + p.velocity.y * t - 0.5 * t * t,
+        center.z + p.velocity.z * t,
+      );
+      p.material.opacity = 0.95 * fade;
+      p.mesh.scale.setScalar(1 - t * 0.35);
+    }
+
+    if (t < 1) {
+      window.requestAnimationFrame(animate);
+      return;
+    }
+
+    renderer.scene.remove(group);
+    flashGeo.dispose();
+    flashMat.dispose();
+    for (const p of particles) {
+      const geo = p.mesh.geometry as THREE.BufferGeometry;
+      geo.dispose();
+      p.material.dispose();
+    }
+  };
+
+  window.requestAnimationFrame(animate);
+}
+
+async function animateMoveSteps(
+  piece: Piece,
+  from: Position3D,
+  to: Position3D,
+  token: number,
+  captured: boolean,
+): Promise<void> {
+  const mesh = pieceView.getMeshForPiece(piece);
+  if (!mesh) return;
+
+  const [fromX, fromY, fromZ] = boardToWorld(from);
+  mesh.position.set(fromX, fromY, fromZ);
+
+  const path = buildStepPath(from, to);
+  for (let i = 0; i < path.length; i++) {
+    if (token !== moveAnimationToken) return;
+    const [x, y, z] = boardToWorld(path[i]);
+    mesh.position.set(x, y, z);
+    if (captured && i === path.length - 1) {
+      playCapture();
+      spawnImpactBurst(to);
+    } else {
+      playStep();
+    }
+    if (i < path.length - 1) await sleep(MOVE_STEP_MS);
+  }
+}
+
+function recalcThreatLines(): void {
+  boardView.clearThreatLines();
+  if (!game || !game.lastMove) return;
+  const enemyColor = game.currentTurn === PieceColor.White ? PieceColor.Black : PieceColor.White;
+  const pairs = computeThreatLinesAfterMove(game.board, enemyColor);
+  if (pairs.length > 0) {
+    boardView.showThreatLines(pairs);
+  }
+}
+
+function recalcMyThreats(): void {
+  boardView.clearDangerPreviewLines();
+  if (!game || !myThreatsActive) return;
+  const myColor = game.currentTurn;
+  const pairs = computeThreatLinesAfterMove(game.board, myColor);
+  if (pairs.length > 0) {
+    boardView.showDangerPreviewLines(pairs);
+  }
+}
 
 function queueHoverPreview(pos: Position3D | null): void {
   queuedHoverPos = pos;
@@ -40,8 +206,9 @@ function queueHoverPreview(pos: Position3D | null): void {
 
     if (!nextPos || !game.selectedPiece) {
       hoverPreviewTargetKey = null;
-      boardView.clearDangerPreviewLines();
       boardView.clearHoverThreatLines();
+      recalcThreatLines();
+      recalcMyThreats();
       return;
     }
 
@@ -50,11 +217,10 @@ function queueHoverPreview(pos: Position3D | null): void {
     hoverPreviewTargetKey = targetKey;
 
     boardView.clearDangerPreviewLines();
-    boardView.clearHoverThreatLines();
     const preview = computeHoverThreatPreview(game.board, game.selectedPiece, nextPos);
     if (!preview) return;
-    if (preview.dangerPairs.length > 0) boardView.showDangerPreviewLines(preview.dangerPairs);
-    if (preview.threatPairs.length > 0) boardView.showHoverThreatLines(preview.threatPairs);
+    boardView.showThreatLines(preview.dangerPairs);
+    boardView.showHoverThreatLines(preview.threatPairs);
   });
 }
 
@@ -68,6 +234,10 @@ function disposeCurrentGame(): void {
 function initGame(mode: GameMode): void {
   disposeCurrentGame();
   attackPreviewActive = false;
+  myThreatsActive = false;
+  isAnimatingMove = false;
+  moveAnimationToken++;
+  moveAnimationQueue = Promise.resolve();
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 
   renderer = new Renderer(canvas);
@@ -137,6 +307,13 @@ function initGame(mode: GameMode): void {
     pieceView.setSelected(null);
   };
 
+  const disableAttackSurfacePreview = (): void => {
+    if (!attackPreviewActive) return;
+    attackPreviewActive = false;
+    ui.setAttackPreviewEnabled(false);
+    restoreHighlightState();
+  };
+
   ui = new UI(game, boardView, {
     onMoveHover: (pos: Position3D | null) => {
       if (pos) {
@@ -146,13 +323,17 @@ function initGame(mode: GameMode): void {
       }
       queueHoverPreview(pos);
     },
-    onAttackPreviewStart: () => {
-      attackPreviewActive = true;
-      applyAttackSurfacePreview();
+    onAttackPreviewToggle: (enabled: boolean) => {
+      attackPreviewActive = enabled;
+      if (enabled) {
+        applyAttackSurfacePreview();
+      } else {
+        restoreHighlightState();
+      }
     },
-    onAttackPreviewEnd: () => {
-      attackPreviewActive = false;
-      restoreHighlightState();
+    onMyThreatsToggle: (enabled: boolean) => {
+      myThreatsActive = enabled;
+      recalcMyThreats();
     },
   });
 
@@ -165,6 +346,8 @@ function initGame(mode: GameMode): void {
   pieceView.sync(game.board);
 
   interaction.setClickHandler((pos: Position3D) => {
+    if (isAnimatingMove) return;
+    disableAttackSurfacePreview();
     game.handleCellClick(pos);
   });
 
@@ -173,6 +356,7 @@ function initGame(mode: GameMode): void {
   });
 
   interaction.setHoverFilter((piece: Piece) => {
+    if (isAnimatingMove) return false;
     if (game.gameOver || game.awaitingPromotion || game.botThinking) return false;
     if (game.isBotTurn() || game.isRemoteTurn()) return false;
     return piece.color === game.currentTurn;
@@ -195,17 +379,6 @@ function initGame(mode: GameMode): void {
     wireOnlineEvents(network, game);
   }
 
-  function recalcThreatLines(): void {
-    boardView.clearThreatLines();
-    if (!game.lastMove) return;
-    const pieceAtTo = game.board.getPieceAt(game.lastMove.to);
-    if (!pieceAtTo) return;
-    const pairs = computeThreatLinesAfterMove(game.board, pieceAtTo.color);
-    if (pairs.length > 0) {
-      boardView.showThreatLines(pairs);
-    }
-  }
-
   game.on((event) => {
     switch (event.type) {
       case 'select': {
@@ -215,7 +388,6 @@ function initGame(mode: GameMode): void {
           const occ = game.board.getPieceAt(m);
           return occ && occ.color !== piece.color;
         });
-        boardView.clearThreatLines();
         boardView.highlightCells(moves, captures);
         boardView.selectCell(piece.position);
         interaction.setHighlightedCells(new Set(moves.map(m => posKey(m))));
@@ -226,28 +398,40 @@ function initGame(mode: GameMode): void {
       case 'deselect':
         hoverPreviewTargetKey = null;
         boardView.clearHighlights();
-        boardView.clearDangerPreviewLines();
         boardView.clearHoverThreatLines();
         interaction.setHighlightedCells(new Set());
         interaction.setSelectedKey(null);
         pieceView.setSelected(null);
         recalcThreatLines();
+        recalcMyThreats();
         break;
       case 'move': {
         hoverPreviewTargetKey = null;
-        const { from, to, captured } = event.data;
-        if (!captured) playMove();
+        const { piece, from, to, captured } = event.data;
+        const token = moveAnimationToken;
         boardView.clearCheckPath();
-        boardView.clearDangerPreviewLines();
         boardView.clearHoverThreatLines();
-        pieceView.sync(game.board);
         boardView.highlightLastMove(from, to);
         recalcThreatLines();
+        recalcMyThreats();
+        moveAnimationQueue = moveAnimationQueue.then(async () => {
+          if (token !== moveAnimationToken) return;
+          isAnimatingMove = true;
+          try {
+            await animateMoveSteps(piece, from, to, token, !!captured);
+            if (token === moveAnimationToken) {
+              pieceView.sync(game.board);
+              game.finalizeMove();
+            }
+          } finally {
+            if (token === moveAnimationToken) {
+              isAnimatingMove = false;
+            }
+          }
+        });
         break;
       }
       case 'capture':
-        playCapture();
-        pieceView.sync(game.board);
         break;
       case 'promotion': {
         const { piece: promoted } = event.data;
@@ -265,6 +449,8 @@ function initGame(mode: GameMode): void {
         break;
       case 'reset':
         hoverPreviewTargetKey = null;
+        moveAnimationToken++;
+        isAnimatingMove = false;
         pieceView.sync(game.board);
         pieceView.setSelected(null);
         boardView.clearHighlights();
@@ -278,13 +464,14 @@ function initGame(mode: GameMode): void {
         break;
       case 'undo': {
         hoverPreviewTargetKey = null;
+        moveAnimationToken++;
+        isAnimatingMove = false;
         const { lastMove } = event.data;
         pieceView.sync(game.board);
         pieceView.setSelected(null);
         boardView.clearHighlights();
         boardView.clearLastMove();
         boardView.clearCheckPath();
-        boardView.clearDangerPreviewLines();
         boardView.clearHoverThreatLines();
         interaction.setHighlightedCells(new Set());
         interaction.setSelectedKey(null);
@@ -294,6 +481,7 @@ function initGame(mode: GameMode): void {
           boardView.highlightLastMove(lastMove.from, lastMove.to);
         }
         recalcThreatLines();
+        recalcMyThreats();
         break;
       }
       case 'botTurn':
@@ -313,9 +501,18 @@ async function handleBotTurn(): Promise<void> {
 
   const statusEl = document.getElementById('game-status')!;
   statusEl.textContent = 'Thinking...';
+  const thinkStart = performance.now();
 
   try {
     const move = await bot.pickMove(game.board);
+    if (bot.difficulty === 'easy') {
+      const targetThinkMs =
+        EASY_BOT_MIN_THINK_MS + Math.random() * (EASY_BOT_MAX_THINK_MS - EASY_BOT_MIN_THINK_MS);
+      const elapsedMs = performance.now() - thinkStart;
+      if (elapsedMs < targetThinkMs) {
+        await sleep(targetThinkMs - elapsedMs);
+      }
+    }
     if (game.gameOver || !game.isBotTurn()) return;
 
     game.botThinking = false;
@@ -365,6 +562,7 @@ function showMenu(): void {
   }
   menu.classList.remove('menu-fade-out');
   menu.style.display = 'flex';
+  menuController?.resetToMainMenu();
 }
 
 function returnToMenuFromGame(): void {
@@ -417,14 +615,14 @@ function hideLobby(): void {
   lobby.style.display = 'none';
 }
 
-async function startOnlineHost(localColor: PieceColor): Promise<void> {
+async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promise<void> {
   onlineFlowCancelled = false;
   network = new Network();
 
   try {
     const peerId = await network.host();
     const base = window.location.href.split('#')[0];
-    const inviteUrl = `${base}#online:${peerId}:${localColor}`;
+    const inviteUrl = `${base}#online:${peerId}:${localColor}:${setup}`;
 
     hideMenu();
     showLobby(inviteUrl);
@@ -435,7 +633,7 @@ async function startOnlineHost(localColor: PieceColor): Promise<void> {
     hideLobby();
     showGame();
     network.sendStart();
-    initGame({ type: 'online', localColor });
+    initGame({ type: 'online', localColor, setup });
   } catch (err) {
     console.error('Failed to host online game:', err);
     network.disconnect();
@@ -443,7 +641,7 @@ async function startOnlineHost(localColor: PieceColor): Promise<void> {
   }
 }
 
-async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor): Promise<void> {
+async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor, setup: SetupMode): Promise<void> {
   onlineFlowCancelled = false;
   const localColor = hostColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
   network = new Network();
@@ -468,7 +666,7 @@ async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor): Prom
 
     hideLobby();
     showGame();
-    initGame({ type: 'online', localColor });
+    initGame({ type: 'online', localColor, setup });
   } catch (err) {
     console.error('Failed to join online game:', err);
     lobbyTitle.textContent = 'Connection failed';
@@ -490,13 +688,14 @@ function returnToHomeFromLobby(): void {
   window.location.hash = '';
 }
 
-function parseOnlineHash(): { peerId: string; hostColor: PieceColor } | null {
+function parseOnlineHash(): { peerId: string; hostColor: PieceColor; setup: SetupMode } | null {
   const hash = window.location.hash;
-  const match = hash.match(/^#online:([^:]+):(white|black)$/);
+  const match = hash.match(/^#online:([^:]+):(white|black)(?::(classic|barricade))?$/);
   if (!match) return null;
   return {
     peerId: match[1],
     hostColor: match[2] as PieceColor,
+    setup: (match[3] as SetupMode | undefined) ?? 'classic',
   };
 }
 
@@ -507,21 +706,21 @@ if (onlineParams) {
   lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
   const gameHomeBtn = document.getElementById('game-home-btn');
   gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
-  startOnlineGuest(onlineParams.peerId, onlineParams.hostColor);
+  startOnlineGuest(onlineParams.peerId, onlineParams.hostColor, onlineParams.setup);
 } else {
-  setupMenu({
-    startLocal: () => {
+  menuController = setupMenu({
+    startLocal: (setup) => {
       hideMenu();
       showGame();
-      initGame({ type: 'local' });
+      initGame({ type: 'local', setup });
     },
-    startBot: (difficulty) => {
+    startBot: (difficulty, setup) => {
       hideMenu();
       showGame();
-      initGame({ type: 'bot', difficulty });
+      initGame({ type: 'bot', difficulty, setup });
     },
-    startOnlineHost: (localColor) => {
-      startOnlineHost(localColor);
+    startOnlineHost: (localColor, setup) => {
+      startOnlineHost(localColor, setup);
     },
   });
   const lobbyBackBtn = document.getElementById('lobby-back-btn');

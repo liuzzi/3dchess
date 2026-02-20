@@ -411,7 +411,7 @@ export class BoardView {
     for (const { from, to } of pairs) {
       const origin = new THREE.Vector3(...boardToWorld(from));
       const dest = new THREE.Vector3(...boardToWorld(to));
-      const arrow = this.createArrow(origin, dest, 0xff2222, 0.6);
+      const arrow = this.createArrow(origin, dest, 0xff8800, 0.6);
       this.group.add(arrow);
       this.hoverThreatArrows.push(arrow);
     }
