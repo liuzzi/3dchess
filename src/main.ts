@@ -543,12 +543,15 @@ async function handleBotTurn(): Promise<void> {
       const elapsedMs = performance.now() - thinkStart;
       if (elapsedMs < targetThinkMs) {
         await sleep(targetThinkMs - elapsedMs);
-      }
+    }
     }
     if (game.gameOver || !game.isBotTurn()) return;
 
     game.botThinking = false;
-    game.makeMove(move.piece, move.to);
+    const moved = game.makeMove(move.piece, move.to);
+    if (!moved) {
+      throw new Error('Bot produced illegal move at execution time');
+    }
   } catch {
     game.botThinking = false;
     statusEl.textContent = '';

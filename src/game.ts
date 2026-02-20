@@ -117,8 +117,8 @@ export class Game {
   }
 
   /** Public entry point for the bot to make a move */
-  makeMove(piece: Piece, to: Position3D): void {
-    this.executeMove(piece, to);
+  makeMove(piece: Piece, to: Position3D): boolean {
+    return this.executeMove(piece, to);
   }
 
   private selectPiece(piece: Piece): void {
@@ -184,7 +184,24 @@ export class Game {
     this.evaluateCurrentPosition();
   }
 
-  private executeMove(piece: Piece, to: Position3D): void {
+  private canExecuteMove(piece: Piece, to: Position3D): boolean {
+    if (this.gameOver || this.awaitingPromotion || this.pendingPostMovePiece) return false;
+    if (piece.color !== this.currentTurn) return false;
+
+    const currentPiece = this.board.getPieceAt(piece.position);
+    if (!currentPiece || currentPiece !== piece) return false;
+
+    const occupant = this.board.getPieceAt(to);
+    if (occupant && occupant.color === piece.color) return false;
+
+    return getLegalMoves(this.board, piece).some(m => posEqual(m, to));
+  }
+
+  private executeMove(piece: Piece, to: Position3D): boolean {
+    if (!this.canExecuteMove(piece, to)) {
+      return false;
+    }
+
     this.pushSnapshot();
     const from = { ...piece.position };
     const captured = this.board.movePiece(piece, to);
@@ -202,6 +219,7 @@ export class Game {
     this.emit({ type: 'move', data: { piece, from, to, captured } });
     this.deselect();
     this.pendingPostMovePiece = piece;
+    return true;
   }
 
   finalizeMove(): void {
