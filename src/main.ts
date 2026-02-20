@@ -34,8 +34,9 @@ let isAnimatingMove = false;
 let moveAnimationToken = 0;
 let moveAnimationQueue: Promise<void> = Promise.resolve();
 
-const MOVE_STEP_MS = 110;
+const MOVE_STEP_MS = 500;
 const IMPACT_BURST_MS = 260;
+const CELL_ENTRY_T = 0.5;
 const EASY_BOT_MIN_THINK_MS = 2000;
 const EASY_BOT_MAX_THINK_MS = 3000;
 
@@ -156,22 +157,51 @@ async function animateMoveSteps(
   const mesh = pieceView.getMeshForPiece(piece);
   if (!mesh) return;
 
-  const [fromX, fromY, fromZ] = boardToWorld(from);
-  mesh.position.set(fromX, fromY, fromZ);
-
   const path = buildStepPath(from, to);
-  for (let i = 0; i < path.length; i++) {
+  const worldPath = [from, ...path].map((p) => {
+    const [x, y, z] = boardToWorld(p);
+    return new THREE.Vector3(x, y, z);
+  });
+
+  mesh.position.copy(worldPath[0]);
+  boardView.setTraversalCell(null);
+  for (let i = 1; i < worldPath.length; i++) {
     if (token !== moveAnimationToken) return;
-    const [x, y, z] = boardToWorld(path[i]);
-    mesh.position.set(x, y, z);
-    if (captured && i === path.length - 1) {
+    const start = worldPath[i - 1];
+    const end = worldPath[i];
+    const enteredCell = path[i - 1];
+
+    await new Promise<void>((resolve) => {
+      const begin = performance.now();
+      let enteredCellTriggered = false;
+      const tick = (now: number): void => {
+        if (token !== moveAnimationToken) {
+          resolve();
+          return;
+        }
+        const t = Math.min(1, (now - begin) / MOVE_STEP_MS);
+        mesh.position.lerpVectors(start, end, t);
+        if (!enteredCellTriggered && t >= CELL_ENTRY_T) {
+          enteredCellTriggered = true;
+          boardView.setTraversalCell(enteredCell);
+          playStep();
+        }
+        if (t < 1) {
+          window.requestAnimationFrame(tick);
+          return;
+        }
+        resolve();
+      };
+      window.requestAnimationFrame(tick);
+    });
+
+    if (token !== moveAnimationToken) return;
+    if (captured && i === worldPath.length - 1) {
       playCapture();
       spawnImpactBurst(to);
-    } else {
-      playStep();
     }
-    if (i < path.length - 1) await sleep(MOVE_STEP_MS);
   }
+  boardView.setTraversalCell(null);
 }
 
 function recalcThreatLines(): void {
@@ -420,10 +450,12 @@ function initGame(mode: GameMode): void {
           try {
             await animateMoveSteps(piece, from, to, token, !!captured);
             if (token === moveAnimationToken) {
+              boardView.setTraversalCell(null);
               pieceView.sync(game.board);
               game.finalizeMove();
             }
           } finally {
+            boardView.setTraversalCell(null);
             if (token === moveAnimationToken) {
               isAnimatingMove = false;
             }

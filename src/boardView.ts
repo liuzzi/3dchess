@@ -22,9 +22,11 @@ export class BoardView {
   private pathPreviewCells: Set<string> = new Set();
   private lastMoveCells: Set<string> = new Set();
   private checkPathCells: Set<string> = new Set();
+  private traversalCell: string | null = null;
   private threatArrows: THREE.Group[] = [];
   private dangerPreviewArrows: THREE.Group[] = [];
   private hoverThreatArrows: THREE.Group[] = [];
+  private traversalFlashTimers: Map<string, number> = new Map();
 
   private baseStyles: Map<string, CellBase> = new Map();
   private frostingLevel: number = 0.06;
@@ -186,6 +188,54 @@ export class BoardView {
     }
   }
 
+  setTraversalCell(pos: Position3D | null): void {
+    const nextKey = pos ? posKey(pos) : null;
+    if (this.traversalCell === nextKey) return;
+
+    if (this.traversalCell) {
+      this.restoreCell(this.traversalCell);
+      this.traversalCell = null;
+    }
+
+    if (!nextKey) return;
+    this.traversalCell = nextKey;
+    const mesh = this.cellMeshes.get(nextKey);
+    if (mesh) {
+      (mesh.material as THREE.MeshBasicMaterial).color.set(0xe6fbff);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.34;
+    }
+    const edge = this.cellEdges.get(nextKey);
+    if (edge) {
+      (edge.material as THREE.LineDashedMaterial).color.set(0xffffff);
+      (edge.material as THREE.LineDashedMaterial).opacity = 1.0;
+    }
+  }
+
+  flashTraversalCell(pos: Position3D, durationMs = 180): void {
+    const key = posKey(pos);
+    const existingTimer = this.traversalFlashTimers.get(key);
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+    }
+
+    const mesh = this.cellMeshes.get(key);
+    if (mesh) {
+      (mesh.material as THREE.MeshBasicMaterial).color.set(0xe6fbff);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.34;
+    }
+    const edge = this.cellEdges.get(key);
+    if (edge) {
+      (edge.material as THREE.LineDashedMaterial).color.set(0xffffff);
+      (edge.material as THREE.LineDashedMaterial).opacity = 1.0;
+    }
+
+    const timer = window.setTimeout(() => {
+      this.traversalFlashTimers.delete(key);
+      this.restoreCell(key);
+    }, durationMs);
+    this.traversalFlashTimers.set(key, timer);
+  }
+
   private reapplyHighlight(key: string): void {
     const mesh = this.cellMeshes.get(key);
     const edge = this.cellEdges.get(key);
@@ -300,7 +350,8 @@ export class BoardView {
       key === this.hoveredCell ||
       this.pathPreviewCells.has(key) ||
       this.lastMoveCells.has(key) ||
-      this.checkPathCells.has(key)
+      this.checkPathCells.has(key) ||
+      key === this.traversalCell
     );
   }
 
