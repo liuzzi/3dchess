@@ -21,8 +21,12 @@ export class Bot {
     return Math.max(2, Math.min(4, cores - 1));
   }
 
-  private requestWorker(worker: Worker, req: WorkerRequest): Promise<WorkerResponse> {
+  private requestWorker(worker: Worker, req: WorkerRequest, timeoutMs = 22000): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error('Worker timeout'));
+      }, timeoutMs);
       const onMessage = (e: MessageEvent<WorkerResponse>) => {
         cleanup();
         resolve(e.data);
@@ -32,6 +36,7 @@ export class Bot {
         reject(err);
       };
       const cleanup = () => {
+        window.clearTimeout(timeoutId);
         worker.removeEventListener('message', onMessage);
         worker.removeEventListener('error', onError);
       };
@@ -40,6 +45,15 @@ export class Bot {
       worker.addEventListener('error', onError);
       worker.postMessage(req);
     });
+  }
+
+  private pickMoveSingle(board: Board): Promise<WorkerResponse> {
+    const timeoutMs = this.difficulty === 'hard' ? 22000 : this.difficulty === 'medium' ? 12000 : 8000;
+    return this.requestWorker(this.workers[0], {
+      pieces: board.serialize(),
+      color: this.color,
+      difficulty: this.difficulty,
+    }, timeoutMs);
   }
 
   private buildRootMoves(board: Board): RootMove[] {
@@ -81,7 +95,7 @@ export class Bot {
       this.workers
         .map((worker, idx) => ({ worker, moves: buckets[idx] }))
         .filter(x => x.moves.length > 0)
-        .map(x => this.requestWorker(x.worker, { ...reqBase, rootMoves: x.moves })),
+        .map(x => this.requestWorker(x.worker, { ...reqBase, rootMoves: x.moves }, 22000)),
     );
 
     const results = settled
@@ -98,6 +112,11 @@ export class Bot {
       .map(r => r.completedDepth)
       .filter((d): d is number => typeof d === 'number' && d > 0);
     const commonDepth = completedDepths.length > 0 ? Math.min(...completedDepths) : 1;
+    const maxDepth = completedDepths.length > 0 ? Math.max(...completedDepths) : 1;
+    const depthSpread = maxDepth - commonDepth;
+    if (depthSpread > 2) {
+      return this.pickMoveSingle(board);
+    }
 
     const comparable = results
       .map((r) => {
@@ -109,6 +128,10 @@ export class Bot {
           score: atDepth?.score ?? (r.score ?? -Infinity),
         };
       });
+
+    if (comparable.some(c => !c.fromPos || !c.to || !Number.isFinite(c.score))) {
+      return this.pickMoveSingle(board);
+    }
 
     comparable.sort((a, b) => b.score - a.score);
     const best = comparable[0];
@@ -123,13 +146,17 @@ export class Bot {
   }
 
   async pickMove(board: Board): Promise<{ piece: Piece; to: Position3D }> {
-    const resp = this.workers.length > 1
-      ? await this.pickMoveParallel(board)
-      : await this.requestWorker(this.workers[0], {
-        pieces: board.serialize(),
-        color: this.color,
-        difficulty: this.difficulty,
-      });
+    let resp: WorkerResponse;
+    if (this.workers.length > 1) {
+      try {
+        resp = await this.pickMoveParallel(board);
+      } catch {
+        // Strict fallback to single search path if parallel orchestration fails.
+        resp = await this.pickMoveSingle(board);
+      }
+    } else {
+      resp = await this.pickMoveSingle(board);
+    }
 
     if (resp.type === 'error') {
       throw new Error(resp.error);
