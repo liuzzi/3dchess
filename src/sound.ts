@@ -103,3 +103,7 @@ export function playMenuConfirm(): void {
   playTone(620, 0.06, 'triangle', 0.055);
   setTimeout(() => playTone(840, 0.07, 'sine', 0.04), 40);
 }
+
+export function playAiThinkTick(): void {
+  playTone(960, 0.03, 'triangle', 0.018);
+}

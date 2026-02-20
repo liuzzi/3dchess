@@ -26,7 +26,9 @@ export class BoardView {
   private threatArrows: THREE.Group[] = [];
   private dangerPreviewArrows: THREE.Group[] = [];
   private hoverThreatArrows: THREE.Group[] = [];
+  private thinkingArrows: THREE.Group[] = [];
   private traversalFlashTimers: Map<string, number> = new Map();
+  private thinkingFlashTimers: Map<string, number> = new Map();
 
   private baseStyles: Map<string, CellBase> = new Map();
   private frostingLevel: number = 0.06;
@@ -471,6 +473,47 @@ export class BoardView {
   clearHoverThreatLines(): void {
     for (const arrow of this.hoverThreatArrows) this.disposeArrow(arrow);
     this.hoverThreatArrows = [];
+  }
+
+  showThinkingLines(pairs: { from: Position3D; to: Position3D }[]): void {
+    this.clearThinkingLines();
+    for (const { from, to } of pairs) {
+      const origin = new THREE.Vector3(...boardToWorld(from));
+      const dest = new THREE.Vector3(...boardToWorld(to));
+      const arrow = this.createArrow(origin, dest, 0xffdd33, 0.45);
+      this.group.add(arrow);
+      this.thinkingArrows.push(arrow);
+    }
+  }
+
+  clearThinkingLines(): void {
+    for (const arrow of this.thinkingArrows) this.disposeArrow(arrow);
+    this.thinkingArrows = [];
+  }
+
+  flashThinkingCell(pos: Position3D, durationMs = 90): void {
+    const key = posKey(pos);
+    const existingTimer = this.thinkingFlashTimers.get(key);
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+    }
+
+    const mesh = this.cellMeshes.get(key);
+    if (mesh) {
+      (mesh.material as THREE.MeshBasicMaterial).color.set(0xffdd44);
+      (mesh.material as THREE.MeshBasicMaterial).opacity = 0.26;
+    }
+    const edge = this.cellEdges.get(key);
+    if (edge) {
+      (edge.material as THREE.LineDashedMaterial).color.set(0xffee88);
+      (edge.material as THREE.LineDashedMaterial).opacity = 0.95;
+    }
+
+    const timer = window.setTimeout(() => {
+      this.thinkingFlashTimers.delete(key);
+      this.restoreCell(key);
+    }, durationMs);
+    this.thinkingFlashTimers.set(key, timer);
   }
 
   clearDangerPreviewLines(): void {

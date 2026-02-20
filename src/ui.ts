@@ -21,8 +21,8 @@ const PROMO_CHOICES: { type: PieceType; label: string }[] = [
 
 interface UIOptions {
   onMoveHover?: (pos: Position3D | null) => void;
-  onAttackPreviewToggle?: (enabled: boolean) => void;
   onMyThreatsToggle?: (enabled: boolean) => void;
+  onAiThinkingFxToggle?: (enabled: boolean) => void;
 }
 
 export class UI {
@@ -36,11 +36,11 @@ export class UI {
   private movePanelEl: HTMLElement | null;
   private movePanelEmptyEl: HTMLElement | null;
   private moveOptionsEl: HTMLElement | null;
-  private attackPreviewCheckbox: HTMLInputElement | null;
   private myThreatsCheckbox: HTMLInputElement | null;
+  private aiThinkingFxCheckbox: HTMLInputElement | null;
   private onMoveHover: (pos: Position3D | null) => void;
-  private onAttackPreviewToggle: (enabled: boolean) => void;
   private onMyThreatsToggle: (enabled: boolean) => void;
+  private onAiThinkingFxToggle: (enabled: boolean) => void;
   private moveOptionButtons = new Map<string, HTMLButtonElement>();
   private hoveredMoveKey: string | null = null;
   private ac = new AbortController();
@@ -60,11 +60,11 @@ export class UI {
     this.movePanelEl = document.getElementById('move-panel');
     this.movePanelEmptyEl = document.getElementById('move-panel-empty');
     this.moveOptionsEl = document.getElementById('move-options');
-    this.attackPreviewCheckbox = document.getElementById('attack-preview-checkbox') as HTMLInputElement | null;
     this.myThreatsCheckbox = document.getElementById('my-threats-checkbox') as HTMLInputElement | null;
+    this.aiThinkingFxCheckbox = document.getElementById('ai-thinking-fx-checkbox') as HTMLInputElement | null;
     this.onMoveHover = options?.onMoveHover ?? (() => {});
-    this.onAttackPreviewToggle = options?.onAttackPreviewToggle ?? (() => {});
     this.onMyThreatsToggle = options?.onMyThreatsToggle ?? (() => {});
+    this.onAiThinkingFxToggle = options?.onAiThinkingFxToggle ?? (() => {});
 
     const signal = this.ac.signal;
     this.newGameBtn.addEventListener('click', () => {
@@ -76,8 +76,8 @@ export class UI {
     this.setupPromoButtons();
     this.setupFrostingSlider();
     this.setupOutlineBrightnessSlider();
-    this.setupAttackPreviewButton();
     this.setupMyThreatsButton();
+    this.setupAiThinkingFxButton();
     this.updateTurn();
     this.updateCaptured();
     this.updateUndoBtn();
@@ -148,20 +148,6 @@ export class UI {
     }, { signal: this.ac.signal });
   }
 
-  private setupAttackPreviewButton(): void {
-    const checkbox = this.attackPreviewCheckbox;
-    if (!checkbox) return;
-    const signal = this.ac.signal;
-    checkbox.addEventListener('change', () => {
-      this.onAttackPreviewToggle(checkbox.checked);
-    }, { signal });
-  }
-
-  setAttackPreviewEnabled(enabled: boolean): void {
-    if (!this.attackPreviewCheckbox) return;
-    this.attackPreviewCheckbox.checked = enabled;
-  }
-
   private setupMyThreatsButton(): void {
     const checkbox = this.myThreatsCheckbox;
     if (!checkbox) return;
@@ -171,9 +157,23 @@ export class UI {
     }, { signal });
   }
 
+  private setupAiThinkingFxButton(): void {
+    const checkbox = this.aiThinkingFxCheckbox;
+    if (!checkbox) return;
+    const signal = this.ac.signal;
+    checkbox.addEventListener('change', () => {
+      this.onAiThinkingFxToggle(checkbox.checked);
+    }, { signal });
+  }
+
   setMyThreatsEnabled(enabled: boolean): void {
     if (!this.myThreatsCheckbox) return;
     this.myThreatsCheckbox.checked = enabled;
+  }
+
+  setAiThinkingFxEnabled(enabled: boolean): void {
+    if (!this.aiThinkingFxCheckbox) return;
+    this.aiThinkingFxCheckbox.checked = enabled;
   }
 
   private formatPos(pos: Position3D): string {

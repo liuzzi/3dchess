@@ -24,15 +24,22 @@ function eq(a: Position3D, b: Position3D): boolean {
 function makeWorkerRequest(req: WorkerRequest): Promise<WorkerResponse> {
   const worker = new Worker(new URL('./botWorker.ts', import.meta.url), { type: 'module' });
   return new Promise((resolve, reject) => {
-    const cleanup = () => worker.terminate();
-    worker.addEventListener('message', (e: MessageEvent<WorkerResponse>) => {
+    const onMessage = (e: MessageEvent<WorkerResponse>) => {
+      if (e.data.type === 'progress') return;
       cleanup();
       resolve(e.data);
-    }, { once: true });
-    worker.addEventListener('error', (err: ErrorEvent) => {
+    };
+    const onError = (err: ErrorEvent) => {
       cleanup();
       reject(err);
-    }, { once: true });
+    };
+    const cleanup = () => {
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+      worker.terminate();
+    };
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
     worker.postMessage(req);
   });
 }

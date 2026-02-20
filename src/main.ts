@@ -5,11 +5,11 @@ import { Interaction } from './interaction';
 import { Game } from './game';
 import { UI } from './ui';
 import { Bot } from './bot';
+import type { WorkerResponse } from './botWorker';
 import { Network } from './network';
 import * as THREE from 'three';
 import { Piece, PieceColor, Position3D, posKey, GameMode, SetupMode, boardToWorld } from './types';
-import { getLegalMoves } from './movement';
-import { playCapture, playCheck, playCheckmate, playStep } from './sound';
+import { playAiThinkTick, playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
 import { setupMenu, type MenuControllerHandle } from './menuController';
 import { computeHoverThreatPreview, computeThreatLinesAfterMove } from './threatPreview';
@@ -28,11 +28,13 @@ let onlineFlowCancelled = false;
 let hoverPreviewTargetKey: string | null = null;
 let hoverPreviewRafPending = false;
 let queuedHoverPos: Position3D | null = null;
-let attackPreviewActive = false;
-let myThreatsActive = false;
+let myThreatsActive = true;
+let aiThinkingFxEnabled = false;
 let isAnimatingMove = false;
 let moveAnimationToken = 0;
 let moveAnimationQueue: Promise<void> = Promise.resolve();
+let botTurnToken = 0;
+let lastAiFxBeepAt = 0;
 
 const MOVE_STEP_MS = 500;
 const IMPACT_BURST_MS = 260;
@@ -72,6 +74,33 @@ function buildStepPath(from: Position3D, to: Position3D): Position3D[] {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function stopAiThinkingFx(): void {
+  lastAiFxBeepAt = 0;
+  if (boardView) {
+    boardView.clearThinkingLines();
+  }
+}
+
+function startAiThinkingFx(turnToken: number): void {
+  if (!aiThinkingFxEnabled || !game || !boardView || !game.isBotTurn()) return;
+  if (turnToken !== botTurnToken) return;
+  stopAiThinkingFx();
+}
+
+function enqueueAiThinkingFx(progress: WorkerResponse, turnToken: number): void {
+  if (!aiThinkingFxEnabled || !game || turnToken !== botTurnToken) return;
+  if (!progress.fromPos || !progress.to) return;
+  if (progress.type !== 'progress') return;
+  if (progress.progressKind !== 'rootMove' && progress.progressKind !== 'depth') return;
+  boardView.showThinkingLines([{ from: progress.fromPos, to: progress.to }]);
+  boardView.flashThinkingCell(progress.to, 42);
+  const now = performance.now();
+  if (now - lastAiFxBeepAt > 85) {
+    playAiThinkTick();
+    lastAiFxBeepAt = now;
+  }
 }
 
 function spawnImpactBurst(pos: Position3D): void {
@@ -207,8 +236,21 @@ async function animateMoveSteps(
 function recalcThreatLines(): void {
   boardView.clearThreatLines();
   if (!game || !game.lastMove) return;
-  const enemyColor = game.currentTurn === PieceColor.White ? PieceColor.Black : PieceColor.White;
-  const pairs = computeThreatLinesAfterMove(game.board, enemyColor);
+  const opposite = (color: PieceColor): PieceColor => (
+    color === PieceColor.White ? PieceColor.Black : PieceColor.White
+  );
+  const perspectiveColor = (() => {
+    if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
+    if (game.mode.type === 'bot') {
+      if (bot) return opposite(bot.color);
+      return PieceColor.White;
+    }
+    return game.currentTurn;
+  })();
+  const attackerColor = game.mode.type === 'local'
+    ? opposite(game.currentTurn)
+    : opposite(perspectiveColor);
+  const pairs = computeThreatLinesAfterMove(game.board, attackerColor);
   if (pairs.length > 0) {
     boardView.showThreatLines(pairs);
   }
@@ -217,7 +259,17 @@ function recalcThreatLines(): void {
 function recalcMyThreats(): void {
   boardView.clearDangerPreviewLines();
   if (!game || !myThreatsActive) return;
-  const myColor = game.currentTurn;
+  const opposite = (color: PieceColor): PieceColor => (
+    color === PieceColor.White ? PieceColor.Black : PieceColor.White
+  );
+  const myColor = (() => {
+    if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
+    if (game.mode.type === 'bot') {
+      if (bot) return opposite(bot.color);
+      return PieceColor.White;
+    }
+    return game.currentTurn;
+  })();
   const pairs = computeThreatLinesAfterMove(game.board, myColor);
   if (pairs.length > 0) {
     boardView.showDangerPreviewLines(pairs);
@@ -263,8 +315,7 @@ function disposeCurrentGame(): void {
 
 function initGame(mode: GameMode): void {
   disposeCurrentGame();
-  attackPreviewActive = false;
-  myThreatsActive = false;
+  myThreatsActive = true;
   isAnimatingMove = false;
   moveAnimationToken++;
   moveAnimationQueue = Promise.resolve();
@@ -277,73 +328,6 @@ function initGame(mode: GameMode): void {
   game.setMode(mode);
   interaction = new Interaction(renderer, boardView);
 
-  const getPreviewColor = (): PieceColor => {
-    if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
-    if (game.mode.type === 'bot') return PieceColor.White;
-    return game.currentTurn;
-  };
-
-  const applyAttackSurfacePreview = (): void => {
-    const previewColor = getPreviewColor();
-    const moveMap = new Map<string, Position3D>();
-    const captureMap = new Map<string, Position3D>();
-
-    for (const piece of game.board.getPiecesOfColor(previewColor)) {
-      const legalMoves = getLegalMoves(game.board, piece);
-      for (const move of legalMoves) {
-        const key = posKey(move);
-        moveMap.set(key, { ...move });
-        const occ = game.board.getPieceAt(move);
-        if (occ && occ.color !== piece.color) {
-          captureMap.set(key, { ...move });
-        }
-      }
-    }
-
-    const allMoves = Array.from(moveMap.values());
-    const captures = Array.from(captureMap.values());
-    boardView.clearHover();
-    boardView.clearDangerPreviewLines();
-    boardView.clearHoverThreatLines();
-    boardView.highlightCells(allMoves, captures);
-    interaction.setHighlightedCells(new Set(moveMap.keys()));
-    interaction.setSelectedKey(null);
-    pieceView.setSelected(null);
-    queueHoverPreview(null);
-  };
-
-  const restoreHighlightState = (): void => {
-    boardView.clearDangerPreviewLines();
-    boardView.clearHoverThreatLines();
-    queueHoverPreview(null);
-
-    if (game.selectedPiece) {
-      const { piece, moves } = { piece: game.selectedPiece, moves: game.validMoves };
-      const captures = moves.filter(m => {
-        const occ = game.board.getPieceAt(m);
-        return occ && occ.color !== piece.color;
-      });
-      boardView.highlightCells(moves, captures);
-      boardView.selectCell(piece.position);
-      interaction.setHighlightedCells(new Set(moves.map(m => posKey(m))));
-      interaction.setSelectedKey(posKey(piece.position));
-      pieceView.setSelected(piece);
-      return;
-    }
-
-    boardView.clearHighlights();
-    interaction.setHighlightedCells(new Set());
-    interaction.setSelectedKey(null);
-    pieceView.setSelected(null);
-  };
-
-  const disableAttackSurfacePreview = (): void => {
-    if (!attackPreviewActive) return;
-    attackPreviewActive = false;
-    ui.setAttackPreviewEnabled(false);
-    restoreHighlightState();
-  };
-
   ui = new UI(game, boardView, {
     onMoveHover: (pos: Position3D | null) => {
       if (pos) {
@@ -353,17 +337,13 @@ function initGame(mode: GameMode): void {
       }
       queueHoverPreview(pos);
     },
-    onAttackPreviewToggle: (enabled: boolean) => {
-      attackPreviewActive = enabled;
-      if (enabled) {
-        applyAttackSurfacePreview();
-      } else {
-        restoreHighlightState();
-      }
-    },
     onMyThreatsToggle: (enabled: boolean) => {
       myThreatsActive = enabled;
       recalcMyThreats();
+    },
+    onAiThinkingFxToggle: (enabled: boolean) => {
+      aiThinkingFxEnabled = enabled;
+      if (!enabled) stopAiThinkingFx();
     },
   });
 
@@ -374,10 +354,12 @@ function initGame(mode: GameMode): void {
   renderer.scene.add(pieceView.group);
 
   pieceView.sync(game.board);
+  ui.setMyThreatsEnabled(true);
+  ui.setAiThinkingFxEnabled(false);
+  recalcMyThreats();
 
   interaction.setClickHandler((pos: Position3D) => {
     if (isAnimatingMove) return;
-    disableAttackSurfacePreview();
     game.handleCellClick(pos);
   });
 
@@ -436,6 +418,7 @@ function initGame(mode: GameMode): void {
         recalcMyThreats();
         break;
       case 'move': {
+        stopAiThinkingFx();
         hoverPreviewTargetKey = null;
         const { piece, from, to, captured } = event.data;
         const token = moveAnimationToken;
@@ -480,6 +463,7 @@ function initGame(mode: GameMode): void {
         playCheckmate();
         break;
       case 'reset':
+        stopAiThinkingFx();
         hoverPreviewTargetKey = null;
         moveAnimationToken++;
         isAnimatingMove = false;
@@ -495,6 +479,7 @@ function initGame(mode: GameMode): void {
         interaction.setBoard(game.board);
         break;
       case 'undo': {
+        stopAiThinkingFx();
         hoverPreviewTargetKey = null;
         moveAnimationToken++;
         isAnimatingMove = false;
@@ -520,9 +505,6 @@ function initGame(mode: GameMode): void {
         handleBotTurn();
         break;
     }
-    if (attackPreviewActive) {
-      applyAttackSurfacePreview();
-    }
   });
 
   renderer.startLoop(() => {});
@@ -530,13 +512,19 @@ function initGame(mode: GameMode): void {
 
 async function handleBotTurn(): Promise<void> {
   if (!bot || !game) return;
+  const turnToken = ++botTurnToken;
+  startAiThinkingFx(turnToken);
 
   const statusEl = document.getElementById('game-status')!;
   statusEl.textContent = 'Thinking...';
   const thinkStart = performance.now();
 
   try {
-    const move = await bot.pickMove(game.board);
+    const move = await bot.pickMove(
+      game.board,
+      aiThinkingFxEnabled ? (progress) => enqueueAiThinkingFx(progress, turnToken) : undefined,
+    );
+    if (turnToken !== botTurnToken) return;
     if (bot.difficulty === 'easy') {
       const targetThinkMs =
         EASY_BOT_MIN_THINK_MS + Math.random() * (EASY_BOT_MAX_THINK_MS - EASY_BOT_MIN_THINK_MS);
@@ -545,16 +533,21 @@ async function handleBotTurn(): Promise<void> {
         await sleep(targetThinkMs - elapsedMs);
     }
     }
+    if (turnToken !== botTurnToken) return;
     if (game.gameOver || !game.isBotTurn()) return;
 
+    stopAiThinkingFx();
     game.botThinking = false;
     const moved = game.makeMove(move.piece, move.to);
     if (!moved) {
       throw new Error('Bot produced illegal move at execution time');
     }
   } catch {
+    if (!game || turnToken !== botTurnToken) return;
     game.botThinking = false;
     statusEl.textContent = '';
+  } finally {
+    if (turnToken === botTurnToken) stopAiThinkingFx();
   }
 }
 

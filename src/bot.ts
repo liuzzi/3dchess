@@ -1,5 +1,5 @@
 import { Board } from './board';
-import { getLegalMoves } from './movement';
+import { getLegalMoves, getValidMoves, isKingInCheck } from './movement';
 import { Piece, PieceColor, Position3D, Difficulty, PieceType } from './types';
 import type { WorkerRequest, WorkerResponse, RootMove } from './botWorker';
 
@@ -17,17 +17,38 @@ export class Bot {
   private getWorkerCount(): number {
     if (this.difficulty !== 'hard') return 1;
     const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency ?? 4) : 4;
-    // Keep one core for UI/renderer and cap to avoid worker overhead.
-    return Math.max(2, Math.min(4, cores - 1));
+    // Two workers is a better quality/speed tradeoff than broad fan-out for this engine.
+    return cores <= 2 ? 1 : 2;
   }
 
-  private requestWorker(worker: Worker, req: WorkerRequest, timeoutMs = 22000): Promise<WorkerResponse> {
+  private requestWorker(
+    worker: Worker,
+    req: WorkerRequest,
+    timeoutMs = 22000,
+    onProgress?: (resp: WorkerResponse) => void,
+  ): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
+      let latestProgress: WorkerResponse | null = null;
       const timeoutId = window.setTimeout(() => {
         cleanup();
-        reject(new Error('Worker timeout'));
+        if (latestProgress?.fromPos && latestProgress?.to) {
+          resolve({
+            type: 'result',
+            fromPos: latestProgress.fromPos,
+            to: latestProgress.to,
+            score: latestProgress.score,
+            completedDepth: latestProgress.completedDepth,
+          });
+          return;
+        }
+        reject(new Error('Worker timeout before any depth completed'));
       }, timeoutMs);
       const onMessage = (e: MessageEvent<WorkerResponse>) => {
+        if (e.data.type === 'progress') {
+          latestProgress = e.data;
+          onProgress?.(e.data);
+          return;
+        }
         cleanup();
         resolve(e.data);
       };
@@ -47,27 +68,56 @@ export class Bot {
     });
   }
 
-  private pickMoveSingle(board: Board): Promise<WorkerResponse> {
+  private pickMoveSingle(
+    board: Board,
+    onProgress?: (resp: WorkerResponse) => void,
+  ): Promise<WorkerResponse> {
     const timeoutMs = this.difficulty === 'hard' ? 22000 : this.difficulty === 'medium' ? 12000 : 8000;
     return this.requestWorker(this.workers[0], {
       pieces: board.serialize(),
       color: this.color,
       difficulty: this.difficulty,
-    }, timeoutMs);
+      progressMode: onProgress ? 'detailed' : 'depth',
+    }, timeoutMs, onProgress);
   }
 
   private buildRootMoves(board: Board): RootMove[] {
     const all: Array<RootMove & { ordering: number }> = [];
+    const openingPhase = board.pieces.length >= 28;
     for (const piece of board.getPiecesOfColor(this.color)) {
       for (const to of getLegalMoves(board, piece)) {
         const captured = board.getPieceAt(to);
         const captureValue = captured
           ? (captured.type === PieceType.King ? 10_000 : captured.type === PieceType.Queen ? 900 : captured.type === PieceType.Rook ? 500 : captured.type === PieceType.Bishop ? 330 : captured.type === PieceType.Knight ? 320 : 100)
           : 0;
+        const wasUnmoved = !piece.hasMoved;
+        const wasPawn = piece.type === PieceType.Pawn;
+
+        const applied = board.applyMove(piece, to);
+        let threatValue = 0;
+        let givesCheck = false;
+        try {
+          for (const sq of getValidMoves(board, piece)) {
+            const occ = board.getPieceAt(sq);
+            if (occ && occ.color !== piece.color) {
+              threatValue = Math.max(threatValue, captured ? 0 : (occ.type === PieceType.King ? 10_000 : occ.type === PieceType.Queen ? 900 : occ.type === PieceType.Rook ? 500 : occ.type === PieceType.Bishop ? 330 : occ.type === PieceType.Knight ? 320 : 100));
+            }
+          }
+          givesCheck = isKingInCheck(board, this.color === PieceColor.White ? PieceColor.Black : PieceColor.White);
+        } finally {
+          board.unapplyMove(applied);
+        }
+
+        let ordering = captureValue * 10 + threatValue * 3 + (givesCheck ? 800 : 0);
+        if (openingPhase) {
+          if (!wasPawn && wasUnmoved) ordering += 95;
+          if (wasPawn && !captured) ordering -= 40;
+          if ((piece.type === PieceType.Knight || piece.type === PieceType.Bishop) && wasUnmoved) ordering += 30;
+        }
         all.push({
           fromPos: { ...piece.position },
           to: { ...to },
-          ordering: captureValue,
+          ordering,
         });
       }
     }
@@ -75,7 +125,10 @@ export class Bot {
     return all.map(({ fromPos, to }) => ({ fromPos, to }));
   }
 
-  private async pickMoveParallel(board: Board): Promise<WorkerResponse> {
+  private async pickMoveParallel(
+    board: Board,
+    onProgress?: (resp: WorkerResponse) => void,
+  ): Promise<WorkerResponse> {
     const reqBase: Omit<WorkerRequest, 'rootMoves'> = {
       pieces: board.serialize(),
       color: this.color,
@@ -95,7 +148,12 @@ export class Bot {
       this.workers
         .map((worker, idx) => ({ worker, moves: buckets[idx] }))
         .filter(x => x.moves.length > 0)
-        .map(x => this.requestWorker(x.worker, { ...reqBase, rootMoves: x.moves }, 22000)),
+        .map(x => this.requestWorker(
+          x.worker,
+          { ...reqBase, rootMoves: x.moves, progressMode: onProgress ? 'detailed' : 'depth' },
+          22000,
+          onProgress,
+        )),
     );
 
     const results = settled
@@ -115,7 +173,7 @@ export class Bot {
     const maxDepth = completedDepths.length > 0 ? Math.max(...completedDepths) : 1;
     const depthSpread = maxDepth - commonDepth;
     if (depthSpread > 2) {
-      return this.pickMoveSingle(board);
+      return this.pickMoveSingle(board, onProgress);
     }
 
     const comparable = results
@@ -130,7 +188,7 @@ export class Bot {
       });
 
     if (comparable.some(c => !c.fromPos || !c.to || !Number.isFinite(c.score))) {
-      return this.pickMoveSingle(board);
+      return this.pickMoveSingle(board, onProgress);
     }
 
     comparable.sort((a, b) => b.score - a.score);
@@ -145,17 +203,20 @@ export class Bot {
     };
   }
 
-  async pickMove(board: Board): Promise<{ piece: Piece; to: Position3D }> {
+  async pickMove(
+    board: Board,
+    onProgress?: (resp: WorkerResponse) => void,
+  ): Promise<{ piece: Piece; to: Position3D }> {
     let resp: WorkerResponse;
     if (this.workers.length > 1) {
       try {
-        resp = await this.pickMoveParallel(board);
+        resp = await this.pickMoveParallel(board, onProgress);
       } catch {
         // Strict fallback to single search path if parallel orchestration fails.
-        resp = await this.pickMoveSingle(board);
+        resp = await this.pickMoveSingle(board, onProgress);
       }
     } else {
-      resp = await this.pickMoveSingle(board);
+      resp = await this.pickMoveSingle(board, onProgress);
     }
 
     if (resp.type === 'error') {
