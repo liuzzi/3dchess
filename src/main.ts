@@ -13,7 +13,11 @@ import { getLegalMoves, isKingInCheck } from './movement';
 import { playAiThinkTick, playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
 import { setupMenu, type MenuControllerHandle } from './menuController';
-import { computeHoverThreatPreview, computeThreatLinesAfterMove } from './threatPreview';
+import {
+  computeHoverThreatPreview,
+  computeProtectionLinesForThreatenedPieces,
+  computeThreatLinesAfterMove,
+} from './threatPreview';
 import { autoPromoteToQueen } from './promotion';
 
 let renderer: Renderer;
@@ -31,6 +35,7 @@ let hoverPreviewTargetKey: string | null = null;
 let hoverPreviewRafPending = false;
 let queuedHoverPos: Position3D | null = null;
 let myThreatsActive = true;
+let showProtectedActive = true;
 let aiThinkingFxEnabled = false;
 let isAnimatingMove = false;
 let moveAnimationToken = 0;
@@ -38,6 +43,50 @@ let moveAnimationQueue: Promise<void> = Promise.resolve();
 let botTurnToken = 0;
 let lastAiFxBeepAt = 0;
 let aiThinkingDepthArrowHoldUntil = 0;
+let isCtrlPressed = false;
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Control' && !isCtrlPressed) {
+    isCtrlPressed = true;
+    updateHighlightedMoves();
+  }
+});
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'Control') {
+    isCtrlPressed = false;
+    updateHighlightedMoves();
+  }
+});
+window.addEventListener('blur', () => {
+  if (isCtrlPressed) {
+    isCtrlPressed = false;
+    updateHighlightedMoves();
+  }
+});
+
+function updateHighlightedMoves() {
+  if (!game || !game.selectedPiece) return;
+  const piece = game.selectedPiece;
+  let moves = game.validMoves;
+  
+  if (isCtrlPressed) {
+    moves = moves.filter(m => 
+      Math.abs(m.x - piece.position.x) <= 1 &&
+      Math.abs(m.y - piece.position.y) <= 1 &&
+      Math.abs(m.z - piece.position.z) <= 1
+    );
+  }
+
+  const captures = moves.filter(m => {
+    const occ = game.board.getPieceAt(m);
+    return occ && occ.color !== piece.color;
+  });
+
+  boardView.highlightCells(moves, captures);
+  boardView.selectCell(piece.position);
+  interaction.setHighlightedCells(new Set(moves.map(m => posKey(m))));
+  interaction.setSelectedKey(posKey(piece.position));
+}
 
 const MOVE_STEP_MS = 500;
 const IMPACT_BURST_MS = 260;
@@ -336,6 +385,7 @@ async function animateMoveSteps(
 
 function recalcThreatLines(): void {
   boardView.clearThreatLines();
+  boardView.clearHoverProtectionLines();
   if (!game || !game.lastMove) return;
   const opposite = (color: PieceColor): PieceColor => (
     color === PieceColor.White ? PieceColor.Black : PieceColor.White
@@ -354,6 +404,11 @@ function recalcThreatLines(): void {
   const pairs = computeThreatLinesAfterMove(game.board, attackerColor);
   if (pairs.length > 0) {
     boardView.showThreatLines(pairs);
+  }
+  if (!showProtectedActive || game.selectedPiece) return;
+  const protectionPairs = computeProtectionLinesForThreatenedPieces(game.board, attackerColor);
+  if (protectionPairs.length > 0) {
+    boardView.showHoverProtectionLines(protectionPairs);
   }
 }
 
@@ -400,10 +455,16 @@ function queueHoverPreview(pos: Position3D | null): void {
     hoverPreviewTargetKey = targetKey;
 
     boardView.clearDangerPreviewLines();
+    boardView.clearHoverThreatLines();
     const preview = computeHoverThreatPreview(game.board, game.selectedPiece, nextPos);
     if (!preview) return;
     boardView.showThreatLines(preview.dangerPairs);
     boardView.showHoverThreatLines(preview.threatPairs);
+    if (showProtectedActive) {
+      boardView.showHoverProtectionLines(preview.protectionPairs);
+    } else {
+      boardView.clearHoverProtectionLines();
+    }
   });
 }
 
@@ -417,6 +478,7 @@ function disposeCurrentGame(): void {
 function initGame(mode: GameMode): void {
   disposeCurrentGame();
   myThreatsActive = true;
+  showProtectedActive = true;
   isAnimatingMove = false;
   moveAnimationToken++;
   moveAnimationQueue = Promise.resolve();
@@ -442,6 +504,14 @@ function initGame(mode: GameMode): void {
       myThreatsActive = enabled;
       recalcMyThreats();
     },
+    onShowProtectedToggle: (enabled: boolean) => {
+      showProtectedActive = enabled;
+      if (!enabled) {
+        boardView.clearHoverProtectionLines();
+      } else if (!game.selectedPiece) {
+        recalcThreatLines();
+      }
+    },
     onAiThinkingFxToggle: (enabled: boolean) => {
       aiThinkingFxEnabled = enabled;
       if (!enabled) stopAiThinkingFx();
@@ -456,6 +526,7 @@ function initGame(mode: GameMode): void {
 
   pieceView.sync(game.board);
   ui.setMyThreatsEnabled(true);
+  ui.setShowProtectedEnabled(true);
   ui.setAiThinkingFxEnabled(false);
   recalcMyThreats();
 
@@ -485,7 +556,7 @@ function initGame(mode: GameMode): void {
     bot = null;
   }
   if (mode.type === 'bot' && mode.difficulty) {
-    bot = new Bot(PieceColor.Black, mode.difficulty);
+    bot = new Bot(PieceColor.Black, mode.difficulty, mode.setup ?? 'classic');
   }
 
   if (mode.type === 'online' && network) {
@@ -496,16 +567,9 @@ function initGame(mode: GameMode): void {
     switch (event.type) {
       case 'select': {
         hoverPreviewTargetKey = null;
-        const { piece, moves } = event.data;
-        const captures = moves.filter(m => {
-          const occ = game.board.getPieceAt(m);
-          return occ && occ.color !== piece.color;
-        });
-        boardView.highlightCells(moves, captures);
-        boardView.selectCell(piece.position);
-        interaction.setHighlightedCells(new Set(moves.map(m => posKey(m))));
-        interaction.setSelectedKey(posKey(piece.position));
-        pieceView.setSelected(piece);
+        boardView.clearHoverProtectionLines();
+        updateHighlightedMoves();
+        pieceView.setSelected(game.selectedPiece);
         break;
       }
       case 'deselect':
@@ -688,7 +752,16 @@ function showGame(): void {
 }
 
 function hideGame(): void {
-  const gameElementIds = ['game-frame', 'ui-overlay', 'side-panel', 'move-panel', 'promo-modal', 'game-canvas'];
+  const gameElementIds = [
+    'game-frame',
+    'ui-overlay',
+    'side-panel',
+    'move-panel',
+    'move-panel-toggle',
+    'side-panel-toggle',
+    'promo-modal',
+    'game-canvas',
+  ];
   gameElementIds.forEach((id) => {
     const el = document.getElementById(id);
     if (el) {
@@ -848,7 +921,7 @@ function returnToHomeFromLobby(): void {
 
 function parseOnlineHash(): { peerId: string; hostColor: PieceColor; setup: SetupMode } | null {
   const hash = window.location.hash;
-  const match = hash.match(/^#online:([^:]+):(white|black)(?::(classic|barricade))?$/);
+  const match = hash.match(/^#online:([^:]+):(white|black)(?::(classic|barricade|pawnWall))?$/);
   if (!match) return null;
   return {
     peerId: match[1],

@@ -1,6 +1,6 @@
 import { Board } from './board';
 import { getLegalMoves, getValidMoves, isKingInCheck } from './movement';
-import { Piece, PieceColor, PieceType, Position3D, Difficulty, posKey } from './types';
+import { Piece, PieceColor, PieceType, Position3D, Difficulty, SetupMode, posKey } from './types';
 import { autoPromoteToQueen } from './promotion';
 
 const PIECE_VALUE: Record<PieceType, number> = {
@@ -111,6 +111,7 @@ interface TranspositionEntry {
 const transpositionTable = new Map<string, TranspositionEntry>();
 const historyTable = new Map<string, number>();
 const killerMoves = new Map<number, [string, string]>();
+let activeSetup: SetupMode = 'classic';
 
 function checkTime(): void {
   nodesSearched++;
@@ -123,34 +124,78 @@ function getOpponent(color: PieceColor): PieceColor {
   return color === PieceColor.White ? PieceColor.Black : PieceColor.White;
 }
 
+// 64-bit Zobrist hashing via two 32-bit integers
+let ZOBRIST_PIECES_LOW = new Int32Array(512 * 12);
+let ZOBRIST_PIECES_HIGH = new Int32Array(512 * 12);
+let ZOBRIST_BLACK_MOVE_LOW = 0;
+let ZOBRIST_BLACK_MOVE_HIGH = 0;
+
+function initZobrist() {
+  let seed = 1070372;
+  function random32() {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return seed;
+  }
+  
+  for (let i = 0; i < 512 * 12; i++) {
+    ZOBRIST_PIECES_LOW[i] = random32();
+    ZOBRIST_PIECES_HIGH[i] = random32();
+  }
+  ZOBRIST_BLACK_MOVE_LOW = random32();
+  ZOBRIST_BLACK_MOVE_HIGH = random32();
+}
+initZobrist();
+
 function pieceTypeIndex(type: PieceType): number {
   switch (type) {
-    case PieceType.Pawn: return 1;
-    case PieceType.Knight: return 2;
-    case PieceType.Bishop: return 3;
-    case PieceType.Rook: return 4;
-    case PieceType.Queen: return 5;
-    case PieceType.King: return 6;
+    case PieceType.Pawn: return 0;
+    case PieceType.Knight: return 1;
+    case PieceType.Bishop: return 2;
+    case PieceType.Rook: return 3;
+    case PieceType.Queen: return 4;
+    case PieceType.King: return 5;
   }
 }
 
-function hashBoard(board: Board, toMove: PieceColor): string {
-  let h1 = 0x811c9dc5;
-  let h2 = 0x9e3779b9;
+interface Hash64 {
+  low: number;
+  high: number;
+}
+
+function hashBoard(board: Board, toMove: PieceColor): Hash64 {
+  let low = 0;
+  let high = 0;
 
   for (const p of board.pieces) {
-    const t = pieceTypeIndex(p.type);
-    const c = p.color === PieceColor.White ? 1 : 2;
-    const hm = p.hasMoved ? 1 : 0;
-    const sq = (p.position.x & 7) | ((p.position.y & 7) << 3) | ((p.position.z & 7) << 6);
-    const code = t | (c << 3) | (hm << 5) | (sq << 6);
-    h1 = Math.imul(h1 ^ code, 16777619);
-    h2 = Math.imul((h2 + code) ^ (code << 7), 2246822519);
+    const pType = pieceTypeIndex(p.type);
+    const colorOffset = p.color === PieceColor.White ? 0 : 6;
+    const pieceIndex = pType + colorOffset;
+    const sq = posKey(p.position);
+    
+    const index = sq * 12 + pieceIndex;
+    low ^= ZOBRIST_PIECES_LOW[index];
+    high ^= ZOBRIST_PIECES_HIGH[index];
   }
 
-  h1 ^= board.pieces.length * 131;
-  h2 ^= (toMove === PieceColor.White ? 17 : 29) * 257;
-  return `${h1 >>> 0}:${h2 >>> 0}:${board.pieces.length}`;
+  if (toMove === PieceColor.Black) {
+    low ^= ZOBRIST_BLACK_MOVE_LOW;
+    high ^= ZOBRIST_BLACK_MOVE_HIGH;
+  }
+  
+  return { low, high };
+}
+
+function hashEquals(a: Hash64, b: Hash64): boolean {
+  return a.low === b.low && a.high === b.high;
+}
+
+function hashToKey(h: Hash64): string {
+  // Used only for transposition table Map keys. In a truly optimized engine this would be a BigBigArray or Uint32Array pair
+  // but JS Maps are still fairly fast with hex strings for 64-bit ints.
+  // Note: we pad with 0s to ensure consistent string length if we wanted, but not strictly necessary.
+  return h.low + ',' + h.high;
 }
 
 function boardSignature(board: Board): string {
@@ -211,25 +256,43 @@ function pawnStructureScore(board: Board, color: PieceColor): number {
   const pawns = board.getPiecesOfColor(color).filter(p => p.type === PieceType.Pawn);
   if (pawns.length === 0) return 0;
 
-  const fileCounts = new Map<string, number>();
-  const pawnSet = new Set<string>();
+  const fileCounts = new Int32Array(64);
+  const pawnSet = new Uint8Array(512);
+  
   for (const p of pawns) {
-    const key = `${p.position.x},${p.position.z}`;
-    pawnSet.add(key);
-    fileCounts.set(key, (fileCounts.get(key) ?? 0) + 1);
+    const fileKey = p.position.x | (p.position.z << 3);
+    pawnSet[posKey(p.position)] = 1;
+    fileCounts[fileKey]++;
   }
 
   let score = 0;
   for (const p of pawns) {
-    const fileKey = `${p.position.x},${p.position.z}`;
-    const fileCount = fileCounts.get(fileKey) ?? 1;
+    const fileKey = p.position.x | (p.position.z << 3);
+    const fileCount = fileCounts[fileKey];
     if (fileCount > 1) score -= (fileCount - 1) * 9;
 
-    const hasNeighbor = pawnSet.has(`${p.position.x - 1},${p.position.z}`)
-      || pawnSet.has(`${p.position.x + 1},${p.position.z}`)
-      || pawnSet.has(`${p.position.x},${p.position.z - 1}`)
-      || pawnSet.has(`${p.position.x},${p.position.z + 1}`);
-    if (!hasNeighbor) score -= 12;
+    // Check 3D diagonals for defending pawns
+    const fwdDir = color === PieceColor.White ? -1 : 1; // backwards from the perspective of the defending pawn
+    const dy = p.position.y + fwdDir;
+    let hasDefender = false;
+    
+    if (dy >= 0 && dy < 8) {
+      for (const dz of [-1, 0, 1]) {
+        for (const dx of [-1, 1]) {
+          const nx = p.position.x + dx;
+          const nz = p.position.z + dz;
+          if (nx >= 0 && nx < 8 && nz >= 0 && nz < 8) {
+             if (pawnSet[posKey({x: nx, y: dy, z: nz})]) {
+               hasDefender = true;
+               break;
+             }
+          }
+        }
+        if (hasDefender) break;
+      }
+    }
+    
+    if (!hasDefender) score -= 12;
     score += progressBonus(p) * 0.8;
   }
   return score;
@@ -249,15 +312,14 @@ function pieceActivity(mobility: number, piece: Piece): number {
 function attackedAndDefendedCounts(
   board: Board,
   moveCache: Map<Piece, Position3D[]>,
-): { white: Map<string, number>; black: Map<string, number> } {
-  const white = new Map<string, number>();
-  const black = new Map<string, number>();
+): { white: Int32Array; black: Int32Array } {
+  const white = new Int32Array(512);
+  const black = new Int32Array(512);
   for (const piece of board.pieces) {
     const targetMap = piece.color === PieceColor.White ? white : black;
     const moves = moveCache.get(piece) ?? [];
     for (const m of moves) {
-      const key = posKey(m);
-      targetMap.set(key, (targetMap.get(key) ?? 0) + 1);
+      targetMap[posKey(m)]++;
     }
   }
   return { white, black };
@@ -304,13 +366,13 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
     if (piece.type === PieceType.King) continue;
     const key = posKey(piece.position);
     const attackedByOpp = piece.color === botColor
-      ? (oppAttacks.get(key) ?? 0)
-      : (botAttacks.get(key) ?? 0);
+      ? oppAttacks[key]
+      : botAttacks[key];
     if (attackedByOpp === 0) continue;
 
     const defendedByOwn = piece.color === botColor
-      ? (botAttacks.get(key) ?? 0)
-      : (oppAttacks.get(key) ?? 0);
+      ? botAttacks[key]
+      : oppAttacks[key];
     const hangingPenalty = Math.min(220, PIECE_VALUE[piece.type] * 0.3 + attackedByOpp * 18);
     if (defendedByOwn === 0) {
       if (piece.color === botColor) {
@@ -335,13 +397,22 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
 }
 
 function getAllMoves(board: Board, color: PieceColor): MoveCandidate[] {
-  const moves: MoveCandidate[] = [];
+  const pseudoLegal: MoveCandidate[] = [];
   for (const piece of board.getPiecesOfColor(color)) {
-    for (const to of getLegalMoves(board, piece)) {
-      moves.push({ piece, to, captured: board.getPieceAt(to) });
+    for (const to of getValidMoves(board, piece)) {
+      pseudoLegal.push({ piece, to, captured: board.getPieceAt(to) });
     }
   }
-  return moves;
+
+  // Filter out moves that leave king in check
+  const legal: MoveCandidate[] = [];
+  for (const move of pseudoLegal) {
+    const applied = board.applyMove(move.piece, move.to);
+    const inCheck = isKingInCheck(board, color);
+    board.unapplyMove(applied);
+    if (!inCheck) legal.push(move);
+  }
+  return legal;
 }
 
 function moveKey(from: Position3D, to: Position3D): string {
@@ -368,6 +439,23 @@ function captureScore(move: MoveCandidate): number {
   return PIECE_VALUE[move.captured.type] * 10 - PIECE_VALUE[move.piece.type];
 }
 
+function seeMoveOrderingPenalty(board: Board, move: MoveCandidate): number {
+  if (!move.captured) return 0;
+  const seeVal = staticExchangeEvaluation(board, move);
+  return seeVal < 0 ? -20000 : 0;
+}
+
+function maxThreatenedEnemyValueByPiece(board: Board, piece: Piece): number {
+  let best = 0;
+  for (const sq of getValidMoves(board, piece)) {
+    const occ = board.getPieceAt(sq);
+    if (!occ || occ.color === piece.color) continue;
+    const v = PIECE_VALUE[occ.type];
+    if (v > best) best = v;
+  }
+  return best;
+}
+
 function orderMoves(
   moves: MoveCandidate[],
   ply: number,
@@ -376,15 +464,26 @@ function orderMoves(
 ): MoveCandidate[] {
   const killers = killerMoves.get(ply);
   const decorated: Array<{ move: MoveCandidate; score: number }> = [];
+  const shouldUseExpensiveTacticalOrdering = Boolean(
+    activeSetup === 'classic'
+    && board
+    && ply <= 1
+    // Barricade and future non-classic setups should skip this expensive branch.
+    && board.pieces.length <= 64
+    && moves.length <= 96,
+  );
 
   for (const move of moves) {
     const key = moveKeyOf(move);
     const killerBoost = killers && (key === killers[0] || key === killers[1]) ? 1400 : 0;
     const pvBoost = pvMoveKey && key === pvMoveKey ? 1_000_000 : 0;
-    let score = pvBoost + captureScore(move) + promotionScore(move) + killerBoost + historyScore(move) * HISTORY_BONUS_SCALE;
+    
+    const seePenalty = (board && move.captured) ? seeMoveOrderingPenalty(board, move) : 0;
+    
+    let score = pvBoost + captureScore(move) + promotionScore(move) + killerBoost + historyScore(move) * HISTORY_BONUS_SCALE + seePenalty;
 
     // Expensive tactical sort bonus only for early plies where ordering impact is highest.
-    if (board && ply <= 1) {
+    if (shouldUseExpensiveTacticalOrdering && board) {
       const openingPhase = board.pieces.length >= 28;
       const wasUnmoved = !move.piece.hasMoved;
       const wasPawn = move.piece.type === PieceType.Pawn;
@@ -445,43 +544,48 @@ function shouldSearchCapture(move: MoveCandidate): boolean {
   return capturedValue + 70 >= attackerValue;
 }
 
-function staticExchangeApprox(board: Board, move: MoveCandidate): number {
-  if (!move.captured) return 0;
-  const target = move.to;
-  const attacker = move.piece;
-  const victimValue = PIECE_VALUE[move.captured.type];
-  const attackerValue = PIECE_VALUE[attacker.type];
-  let swing = victimValue - attackerValue;
-
-  const applied = board.applyMove(attacker, target);
-  try {
-    autoPromoteToQueen(attacker);
-    const enemy = getOpponent(attacker.color);
-    let cheapestPiece: Piece | null = null;
-    let cheapestValue = Infinity;
-    for (const p of board.getPiecesOfColor(enemy)) {
-      const pseudo = getValidMoves(board, p);
-      if (!pseudo.some(m => samePos(m, target))) continue;
-      const value = PIECE_VALUE[p.type];
-      if (value < cheapestValue) {
-        cheapestValue = value;
-        cheapestPiece = p;
-      }
+function findCheapestAttacker(board: Board, target: Position3D, attackerColor: PieceColor): Piece | null {
+  let cheapest: Piece | null = null;
+  let cheapestVal = Infinity;
+  for (const p of board.getPiecesOfColor(attackerColor)) {
+    const pseudo = getValidMoves(board, p);
+    if (!pseudo.some(m => m.x === target.x && m.y === target.y && m.z === target.z)) continue;
+    const v = PIECE_VALUE[p.type];
+    if (v < cheapestVal) {
+      cheapestVal = v;
+      cheapest = p;
     }
-    if (cheapestPiece) {
-      const recapture = board.applyMove(cheapestPiece, target);
-      try {
-        autoPromoteToQueen(cheapestPiece);
-        const legalRecapture = !isKingInCheck(board, enemy);
-        if (legalRecapture) swing -= cheapestValue;
-      } finally {
-        board.unapplyMove(recapture);
+  }
+  return cheapest;
+}
+
+function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0): number {
+  if (!move.captured || depth > 8) return 0;
+  
+  const target = move.to;
+  const victimValue = PIECE_VALUE[move.captured.type];
+  const attackerValue = PIECE_VALUE[move.piece.type];
+  let gain = victimValue - attackerValue;
+  
+  const applied = board.applyMove(move.piece, target);
+  try {
+    autoPromoteToQueen(move.piece);
+    const enemy = getOpponent(move.piece.color);
+    const cheapestAttacker = findCheapestAttacker(board, target, enemy);
+    
+    if (cheapestAttacker) {
+      const recapture: MoveCandidate = { piece: cheapestAttacker, to: target, captured: move.piece };
+      const legalRecapture = !isKingInCheck(board, enemy);
+      if (legalRecapture) {
+         gain -= staticExchangeEvaluation(board, recapture, depth + 1);
       }
     }
   } finally {
     board.unapplyMove(applied);
   }
-  return swing;
+  
+  // You don't HAVE to capture. If a capture sequence is negative, you just stop.
+  return Math.max(0, gain);
 }
 
 function quiescenceMoves(board: Board, color: PieceColor, ply: number): MoveCandidate[] {
@@ -497,7 +601,8 @@ function quiescenceMoves(board: Board, color: PieceColor, ply: number): MoveCand
 
       if (isCapture && captured) {
         const candidate: MoveCandidate = { piece, to, captured };
-        if (shouldSearchCapture(candidate) && staticExchangeApprox(board, candidate) >= -40) {
+        const see = staticExchangeEvaluation(board, candidate);
+        if (see >= 0) {
           moves.push(candidate);
           continue;
         }
@@ -593,14 +698,14 @@ function negamax(
   toMove: PieceColor,
   botColor: PieceColor,
   ply: number,
-  lastCaptureSquare?: string,
+  lastCaptureSquare?: number,
   checkExtBudget = CHECK_EXTENSION_BUDGET,
   recaptureExtBudget = RECAPTURE_EXTENSION_BUDGET,
 ): number {
   checkTime();
   const alphaOrig = alpha;
   const betaOrig = beta;
-  const hash = hashBoard(board, toMove);
+  const hash = hashToKey(hashBoard(board, toMove));
 
   const tt = transpositionTable.get(hash);
   if (tt && tt.depth >= depth) {
@@ -622,8 +727,32 @@ function negamax(
   }
 
   const inCheck = isKingInCheck(board, toMove);
+  
+  // ProbCut: Try to prune branches with a shallow search if we are massively ahead (beta is very low relative to eval)
+  if (!inCheck && depth >= 4 && Math.abs(beta) < MATE_SCORE - 1000) {
+    const probBeta = beta + 200;
+    const staticEval = evaluate(board, botColor, toMove);
+    if (staticEval >= probBeta) {
+      // Do a shallow search to verify the cutoff
+      const probScore = -negamax(
+        board,
+        depth - 3,
+        -probBeta,
+        -probBeta + 1,
+        getOpponent(toMove),
+        botColor,
+        ply + 1,
+        undefined,
+        checkExtBudget,
+        recaptureExtBudget,
+      );
+      if (probScore >= probBeta) return probScore;
+    }
+  }
+
   if (!inCheck && depth >= 3) {
     const staticEval = evaluate(board, botColor, toMove);
+    // Don't null move in zugzwang-likely endgames (e.g. only pawns left)
     const hasNonPawnMaterial = board.getPiecesOfColor(toMove).some(p => p.type !== PieceType.Pawn && p.type !== PieceType.King);
     if (hasNonPawnMaterial && staticEval >= beta) {
       const nullScore = -negamax(
@@ -658,9 +787,22 @@ function negamax(
       const canRecaptureExtend = isRecapture && recaptureExtBudget > 0;
       const extension = canCheckExtend || canRecaptureExtend ? 1 : 0;
       const nextDepth = depth - 1 + extension;
-      const isQuiet = !move.captured && promotionScore(move) === 0 && !givesCheck;
+      // Threat-creating quiet moves should not be reduced away by LMR.
+      // Max threatened value now uses caching implicitly if we precalculate, but here we just check fast.
+      const createsMajorThreat = !move.captured
+        && maxThreatenedEnemyValueByPiece(board, move.piece) >= PIECE_VALUE[PieceType.Rook];
+      const isQuiet = !move.captured && promotionScore(move) === 0 && !givesCheck && !createsMajorThreat;
+      
+      const historyVal = historyScore(move);
+      const isPoorHistory = historyVal < 0;
+      
       const canReduce = nextDepth >= 3 && moveIndex >= 3 && isQuiet && !inCheck;
-      const reduction = canReduce ? (moveIndex >= 8 ? 2 : 1) : 0;
+      let reduction = 0;
+      if (canReduce) {
+        if (moveIndex >= 8) reduction = 2;
+        else reduction = 1;
+        if (isPoorHistory) reduction++; // penalize bad history more
+      }
       const reducedDepth = Math.max(0, nextDepth - reduction);
 
       if (moveIndex === 0) {
@@ -781,7 +923,7 @@ function extractPrincipalVariation(board: Board, toMove: PieceColor, maxPlies = 
   let side = toMove;
   try {
     for (let i = 0; i < maxPlies; i++) {
-      const tt = transpositionTable.get(hashBoard(board, side));
+      const tt = transpositionTable.get(hashToKey(hashBoard(board, side)));
       if (!tt?.bestMoveKey) break;
       const moves = getAllMoves(board, side);
       const best = moves.find(m => moveKeyOf(m) === tt.bestMoveKey);
@@ -994,7 +1136,7 @@ function iterativeSearch(
       bestResult = result;
       const best = result[0];
       completedDepth = depth;
-      const rootHash = hashBoard(board, color);
+      const rootHash = hashToKey(hashBoard(board, color));
       const seededBestKey = moveKey(best.fromPos, best.to);
       const seeded = transpositionTable.get(rootHash);
       if (!seeded || seeded.depth <= depth) {
@@ -1062,6 +1204,7 @@ export interface WorkerRequest {
   pieces: Piece[];
   color: PieceColor;
   difficulty: Difficulty;
+  setup?: SetupMode;
   rootMoves?: RootMove[];
   mode?: 'search' | 'selftest';
   progressMode?: ProgressMode;
@@ -1101,8 +1244,9 @@ function runSelfTest(pieces: Piece[], color: PieceColor, difficulty: Difficulty)
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
-  const { pieces, color, difficulty, rootMoves, mode, progressMode } = e.data;
+  const { pieces, color, difficulty, setup, rootMoves, mode, progressMode } = e.data;
   try {
+    activeSetup = setup ?? 'classic';
     if (mode === 'selftest') {
       const selfTest = runSelfTest(pieces, color, difficulty);
       const resp: WorkerResponse = { type: 'result', selfTest };

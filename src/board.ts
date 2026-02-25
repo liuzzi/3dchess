@@ -8,15 +8,16 @@ const BACK_RANK: PieceType[] = [
 export class Board {
   pieces: Piece[] = [];
 
-  private pieceMap = new Map<string, Piece>();
+  private pieceMap: Array<Piece | undefined>;
 
   constructor() {
+    this.pieceMap = new Array<Piece | undefined>(512).fill(undefined);
     this.reset();
   }
 
   reset(setup: SetupMode = 'classic'): void {
     this.pieces = [];
-    this.pieceMap.clear();
+    this.pieceMap.fill(undefined);
 
     const centerZ = 3; // layer 4 (1-indexed) — center of cube
 
@@ -36,49 +37,56 @@ export class Board {
       this.addPiece({ type: PieceType.Pawn, color: PieceColor.Black, position: { x, y: 6, z: centerZ }, hasMoved: false });
     }
 
-    if (setup !== 'barricade') return;
+    if (setup === 'barricade') {
+      const whiteBarricadeRows = [
+        { y: 0, z: 4 }, // L5,1
+        { y: 1, z: 4 }, // L5,2
+        { y: 0, z: 2 }, // L3,1
+        { y: 1, z: 2 }, // L3,2
+      ];
+      const blackBarricadeRows = [
+        { y: 7, z: 4 }, // L5,8
+        { y: 6, z: 4 }, // L5,7
+        { y: 7, z: 2 }, // L3,8
+        { y: 6, z: 2 }, // L3,7
+      ];
 
-    // Barricade adds extra pawn rows around main pieces.
-    const whiteBarricadeRows = [
-      { y: 0, z: 4 }, // L5,1
-      { y: 1, z: 4 }, // L5,2
-      { y: 0, z: 2 }, // L3,1
-      { y: 1, z: 2 }, // L3,2
-    ];
-    const blackBarricadeRows = [
-      { y: 7, z: 4 }, // L5,8
-      { y: 6, z: 4 }, // L5,7
-      { y: 7, z: 2 }, // L3,8
-      { y: 6, z: 2 }, // L3,7
-    ];
-
-    for (let x = 0; x < 8; x++) {
-      for (const row of whiteBarricadeRows) {
-        this.addPiece({
-          type: PieceType.Pawn,
-          color: PieceColor.White,
-          position: { x, y: row.y, z: row.z },
-          hasMoved: false,
-        });
+      for (let x = 0; x < 8; x++) {
+        for (const row of whiteBarricadeRows) {
+          this.addPiece({
+            type: PieceType.Pawn,
+            color: PieceColor.White,
+            position: { x, y: row.y, z: row.z },
+            hasMoved: false,
+          });
+        }
+        for (const row of blackBarricadeRows) {
+          this.addPiece({
+            type: PieceType.Pawn,
+            color: PieceColor.Black,
+            position: { x, y: row.y, z: row.z },
+            hasMoved: false,
+          });
+        }
       }
-      for (const row of blackBarricadeRows) {
-        this.addPiece({
-          type: PieceType.Pawn,
-          color: PieceColor.Black,
-          position: { x, y: row.y, z: row.z },
-          hasMoved: false,
-        });
+    } else if (setup === 'pawnWall') {
+      for (let z = 0; z < 8; z++) {
+        if (z === centerZ) continue;
+        for (let x = 0; x < 8; x++) {
+          this.addPiece({ type: PieceType.Pawn, color: PieceColor.White, position: { x, y: 1, z }, hasMoved: false });
+          this.addPiece({ type: PieceType.Pawn, color: PieceColor.Black, position: { x, y: 6, z }, hasMoved: false });
+        }
       }
     }
   }
 
   private addPiece(piece: Piece): void {
     this.pieces.push(piece);
-    this.pieceMap.set(posKey(piece.position), piece);
+    this.pieceMap[posKey(piece.position)] = piece;
   }
 
   getPieceAt(pos: Position3D): Piece | undefined {
-    return this.pieceMap.get(posKey(pos));
+    return this.pieceMap[posKey(pos)];
   }
 
   movePiece(piece: Piece, to: Position3D): Piece | undefined {
@@ -87,16 +95,17 @@ export class Board {
       this.removePiece(captured);
     }
 
-    this.pieceMap.delete(posKey(piece.position));
+    this.pieceMap[posKey(piece.position)] = undefined;
     piece.position = { ...to };
     piece.hasMoved = true;
-    this.pieceMap.set(posKey(piece.position), piece);
+    this.pieceMap[posKey(piece.position)] = piece;
 
     return captured;
   }
 
   applyMove(piece: Piece, to: Position3D): AppliedMove {
-    const from = { ...piece.position };
+    // Keep reference to old position to reduce clones.
+    const from = piece.position;
     const previousHasMoved = piece.hasMoved;
     const previousType = piece.type;
     let captured = this.getPieceAt(to);
@@ -107,15 +116,15 @@ export class Board {
       this.removePiece(captured);
     }
 
-    this.pieceMap.delete(posKey(piece.position));
-    piece.position = { ...to };
+    this.pieceMap[posKey(piece.position)] = undefined;
+    piece.position = to; // Reference to the target position object.
     piece.hasMoved = true;
-    this.pieceMap.set(posKey(piece.position), piece);
+    this.pieceMap[posKey(piece.position)] = piece;
 
     return {
       piece,
       from,
-      to: { ...to },
+      to,
       captured,
       capturedIndex,
       previousHasMoved,
@@ -125,16 +134,16 @@ export class Board {
 
   unapplyMove(applied: AppliedMove): void {
     const { piece, from, captured, capturedIndex, previousHasMoved, previousType } = applied;
-    this.pieceMap.delete(posKey(piece.position));
-    piece.position = { ...from };
+    this.pieceMap[posKey(piece.position)] = undefined;
+    piece.position = from;
     piece.hasMoved = previousHasMoved;
     piece.type = previousType;
-    this.pieceMap.set(posKey(piece.position), piece);
+    this.pieceMap[posKey(piece.position)] = piece;
 
     if (captured) {
-      const restorePos = { ...applied.to };
-      captured.position = restorePos;
-      this.pieceMap.set(posKey(restorePos), captured);
+      // Restore capture without clone.
+      captured.position = applied.to;
+      this.pieceMap[posKey(applied.to)] = captured;
       if (capturedIndex >= 0 && capturedIndex <= this.pieces.length) {
         this.pieces.splice(capturedIndex, 0, captured);
       } else {
@@ -144,7 +153,7 @@ export class Board {
   }
 
   removePiece(piece: Piece): void {
-    this.pieceMap.delete(posKey(piece.position));
+    this.pieceMap[posKey(piece.position)] = undefined;
     const idx = this.pieces.indexOf(piece);
     if (idx >= 0) this.pieces.splice(idx, 1);
   }
@@ -164,11 +173,11 @@ export class Board {
   clone(): Board {
     const b = new Board();
     b.pieces = [];
-    b.pieceMap.clear();
+    b.pieceMap.fill(undefined);
     for (const p of this.pieces) {
       const copy: Piece = { type: p.type, color: p.color, position: { ...p.position }, hasMoved: p.hasMoved };
       b.pieces.push(copy);
-      b.pieceMap.set(posKey(copy.position), copy);
+      b.pieceMap[posKey(copy.position)] = copy;
     }
     return b;
   }
@@ -185,11 +194,11 @@ export class Board {
   static deserialize(data: Piece[]): Board {
     const b = new Board();
     b.pieces = [];
-    b.pieceMap.clear();
+    b.pieceMap.fill(undefined);
     for (const p of data) {
       const piece: Piece = { type: p.type, color: p.color, position: { ...p.position }, hasMoved: p.hasMoved };
       b.pieces.push(piece);
-      b.pieceMap.set(posKey(piece.position), piece);
+      b.pieceMap[posKey(piece.position)] = piece;
     }
     return b;
   }

@@ -11,27 +11,28 @@ interface CellBase {
 
 export class BoardView {
   group: THREE.Group;
-  cellMeshes: Map<string, THREE.Mesh> = new Map();
-  cellEdges: Map<string, THREE.LineSegments> = new Map();
+  cellMeshes: Map<number, THREE.Mesh> = new Map();
+  cellEdges: Map<number, THREE.LineSegments> = new Map();
   private cellMeshList: THREE.Mesh[] = [];
 
-  private highlightedCells: Set<string> = new Set();
-  private captureKeys: Set<string> = new Set();
-  private selectedCell: string | null = null;
-  private hoveredCell: string | null = null;
-  private pathPreviewCells: Set<string> = new Set();
-  private lastMoveCells: Set<string> = new Set();
-  private checkPathCells: Set<string> = new Set();
-  private traversalCell: string | null = null;
+  private highlightedCells: Set<number> = new Set();
+  private captureKeys: Set<number> = new Set();
+  private selectedCell: number | null = null;
+  private hoveredCell: number | null = null;
+  private pathPreviewCells: Set<number> = new Set();
+  private lastMoveCells: Set<number> = new Set();
+  private checkPathCells: Set<number> = new Set();
+  private traversalCell: number | null = null;
   private threatArrows: THREE.Group[] = [];
   private dangerPreviewArrows: THREE.Group[] = [];
   private hoverThreatArrows: THREE.Group[] = [];
+  private hoverProtectionArrows: THREE.Group[] = [];
   private thinkingArrows: THREE.Group[] = [];
   private thinkingGhosts: THREE.Group[] = [];
-  private traversalFlashTimers: Map<string, number> = new Map();
-  private thinkingFlashTimers: Map<string, number> = new Map();
+  private traversalFlashTimers: Map<number, number> = new Map();
+  private thinkingFlashTimers: Map<number, number> = new Map();
 
-  private baseStyles: Map<string, CellBase> = new Map();
+  private baseStyles: Map<number, CellBase> = new Map();
   private frostingLevel: number = 0.06;
   private outlineBrightness: number = 0.3;
 
@@ -239,7 +240,7 @@ export class BoardView {
     this.traversalFlashTimers.set(key, timer);
   }
 
-  private reapplyHighlight(key: string): void {
+  private reapplyHighlight(key: number): void {
     const mesh = this.cellMeshes.get(key);
     const edge = this.cellEdges.get(key);
     const isCapture = this.captureKeys.has(key);
@@ -275,7 +276,7 @@ export class BoardView {
     this.lastMoveCells.clear();
   }
 
-  private applyLastMoveStyle(key: string): void {
+  private applyLastMoveStyle(key: number): void {
     const mesh = this.cellMeshes.get(key);
     if (mesh) {
       (mesh.material as THREE.MeshBasicMaterial).color.set(0xaa77dd);
@@ -304,7 +305,7 @@ export class BoardView {
     this.checkPathCells.clear();
   }
 
-  private applyCheckPathStyle(key: string): void {
+  private applyCheckPathStyle(key: number): void {
     const mesh = this.cellMeshes.get(key);
     if (mesh) {
       (mesh.material as THREE.MeshBasicMaterial).color.set(0xdd8833);
@@ -317,7 +318,7 @@ export class BoardView {
     }
   }
 
-  private restoreCell(key: string): void {
+  private restoreCell(key: number): void {
     if (this.lastMoveCells.has(key)) {
       this.applyLastMoveStyle(key);
       return;
@@ -329,7 +330,7 @@ export class BoardView {
     this.restoreCellToBase(key);
   }
 
-  private restoreCellToBase(key: string): void {
+  private restoreCellToBase(key: number): void {
     const base = this.baseStyles.get(key);
     if (!base) return;
 
@@ -346,7 +347,7 @@ export class BoardView {
     }
   }
 
-  private isCellInSpecialState(key: string): boolean {
+  private isCellInSpecialState(key: number): boolean {
     return (
       this.highlightedCells.has(key) ||
       key === this.selectedCell ||
@@ -471,9 +472,26 @@ export class BoardView {
     }
   }
 
+  showHoverProtectionLines(pairs: { from: Position3D; to: Position3D }[]): void {
+    this.clearHoverProtectionLines();
+    for (const { from, to } of pairs) {
+      const origin = new THREE.Vector3(...boardToWorld(from));
+      const dest = new THREE.Vector3(...boardToWorld(to));
+      const arrow = this.createArrow(origin, dest, 0x3da7ff, 0.86);
+      this.group.add(arrow);
+      this.hoverProtectionArrows.push(arrow);
+    }
+  }
+
   clearHoverThreatLines(): void {
     for (const arrow of this.hoverThreatArrows) this.disposeArrow(arrow);
     this.hoverThreatArrows = [];
+    this.clearHoverProtectionLines();
+  }
+
+  clearHoverProtectionLines(): void {
+    for (const arrow of this.hoverProtectionArrows) this.disposeArrow(arrow);
+    this.hoverProtectionArrows = [];
   }
 
   showThinkingLines(pairs: { from: Position3D; to: Position3D }[]): void {

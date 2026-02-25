@@ -22,6 +22,7 @@ const PROMO_CHOICES: { type: PieceType; label: string }[] = [
 interface UIOptions {
   onMoveHover?: (pos: Position3D | null) => void;
   onMyThreatsToggle?: (enabled: boolean) => void;
+  onShowProtectedToggle?: (enabled: boolean) => void;
   onAiThinkingFxToggle?: (enabled: boolean) => void;
 }
 
@@ -34,15 +35,22 @@ export class UI {
   private undoBtn: HTMLButtonElement;
   private promoModal: HTMLElement;
   private movePanelEl: HTMLElement | null;
+  private sidePanelEl: HTMLElement | null;
   private movePanelEmptyEl: HTMLElement | null;
   private moveOptionsEl: HTMLElement | null;
+  private sidePanelToggleBtn: HTMLButtonElement | null;
+  private movePanelToggleBtn: HTMLButtonElement | null;
+  private sidePanelCollapsed = false;
+  private movePanelCollapsed = false;
   private myThreatsCheckbox: HTMLInputElement | null;
+  private showProtectedCheckbox: HTMLInputElement | null;
   private aiThinkingFxCheckbox: HTMLInputElement | null;
   private onMoveHover: (pos: Position3D | null) => void;
   private onMyThreatsToggle: (enabled: boolean) => void;
+  private onShowProtectedToggle: (enabled: boolean) => void;
   private onAiThinkingFxToggle: (enabled: boolean) => void;
-  private moveOptionButtons = new Map<string, HTMLButtonElement>();
-  private hoveredMoveKey: string | null = null;
+  private moveOptionButtons = new Map<number, HTMLButtonElement>();
+  private hoveredMoveKey: number | null = null;
   private ac = new AbortController();
 
   constructor(
@@ -58,12 +66,17 @@ export class UI {
     this.undoBtn = document.getElementById('undo-btn') as HTMLButtonElement;
     this.promoModal = document.getElementById('promo-modal')!;
     this.movePanelEl = document.getElementById('move-panel');
+    this.sidePanelEl = document.getElementById('side-panel');
     this.movePanelEmptyEl = document.getElementById('move-panel-empty');
     this.moveOptionsEl = document.getElementById('move-options');
+    this.sidePanelToggleBtn = document.getElementById('side-panel-toggle') as HTMLButtonElement | null;
+    this.movePanelToggleBtn = document.getElementById('move-panel-toggle') as HTMLButtonElement | null;
     this.myThreatsCheckbox = document.getElementById('my-threats-checkbox') as HTMLInputElement | null;
+    this.showProtectedCheckbox = document.getElementById('show-protected-checkbox') as HTMLInputElement | null;
     this.aiThinkingFxCheckbox = document.getElementById('ai-thinking-fx-checkbox') as HTMLInputElement | null;
     this.onMoveHover = options?.onMoveHover ?? (() => {});
     this.onMyThreatsToggle = options?.onMyThreatsToggle ?? (() => {});
+    this.onShowProtectedToggle = options?.onShowProtectedToggle ?? (() => {});
     this.onAiThinkingFxToggle = options?.onAiThinkingFxToggle ?? (() => {});
 
     const signal = this.ac.signal;
@@ -77,7 +90,9 @@ export class UI {
     this.setupFrostingSlider();
     this.setupOutlineBrightnessSlider();
     this.setupMyThreatsButton();
+    this.setupShowProtectedButton();
     this.setupAiThinkingFxButton();
+    this.setupPanelToggles();
     this.updateTurn();
     this.updateCaptured();
     this.updateUndoBtn();
@@ -166,6 +181,62 @@ export class UI {
     }, { signal });
   }
 
+  private setupShowProtectedButton(): void {
+    const checkbox = this.showProtectedCheckbox;
+    if (!checkbox) return;
+    const signal = this.ac.signal;
+    checkbox.addEventListener('change', () => {
+      this.onShowProtectedToggle(checkbox.checked);
+    }, { signal });
+  }
+
+  private setupPanelToggles(): void {
+    const signal = this.ac.signal;
+    const compactLayout = window.matchMedia('(max-width: 900px)').matches;
+    if (compactLayout) {
+      this.sidePanelCollapsed = true;
+      this.movePanelCollapsed = true;
+    }
+
+    this.sidePanelToggleBtn?.addEventListener('click', () => {
+      this.sidePanelCollapsed = !this.sidePanelCollapsed;
+      this.applyPanelToggleState();
+    }, { signal });
+
+    this.movePanelToggleBtn?.addEventListener('click', () => {
+      this.movePanelCollapsed = !this.movePanelCollapsed;
+      this.applyPanelToggleState();
+    }, { signal });
+
+    this.applyPanelToggleState();
+  }
+
+  private applyPanelToggleState(): void {
+    if (this.sidePanelEl) {
+      this.sidePanelEl.classList.toggle('is-collapsed', this.sidePanelCollapsed);
+    }
+    if (this.movePanelEl) {
+      this.movePanelEl.classList.toggle('is-collapsed', this.movePanelCollapsed);
+    }
+
+    if (this.sidePanelToggleBtn) {
+      this.sidePanelToggleBtn.textContent = this.sidePanelCollapsed ? '<' : '>';
+      this.sidePanelToggleBtn.setAttribute('aria-expanded', String(!this.sidePanelCollapsed));
+      this.sidePanelToggleBtn.setAttribute(
+        'aria-label',
+        this.sidePanelCollapsed ? 'Show side panel' : 'Hide side panel',
+      );
+    }
+    if (this.movePanelToggleBtn) {
+      this.movePanelToggleBtn.textContent = this.movePanelCollapsed ? '>' : '<';
+      this.movePanelToggleBtn.setAttribute('aria-expanded', String(!this.movePanelCollapsed));
+      this.movePanelToggleBtn.setAttribute(
+        'aria-label',
+        this.movePanelCollapsed ? 'Show legal moves panel' : 'Hide legal moves panel',
+      );
+    }
+  }
+
   setMyThreatsEnabled(enabled: boolean): void {
     if (!this.myThreatsCheckbox) return;
     this.myThreatsCheckbox.checked = enabled;
@@ -174,6 +245,11 @@ export class UI {
   setAiThinkingFxEnabled(enabled: boolean): void {
     if (!this.aiThinkingFxCheckbox) return;
     this.aiThinkingFxCheckbox.checked = enabled;
+  }
+
+  setShowProtectedEnabled(enabled: boolean): void {
+    if (!this.showProtectedCheckbox) return;
+    this.showProtectedCheckbox.checked = enabled;
   }
 
   private formatPos(pos: Position3D): string {

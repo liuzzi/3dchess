@@ -65,6 +65,11 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
     barricade.textContent = 'Barricade';
     select.appendChild(barricade);
 
+    const pawnWall = document.createElement('option');
+    pawnWall.value = 'pawnWall';
+    pawnWall.textContent = 'Pawn Wall';
+    select.appendChild(pawnWall);
+
     select.value = selectedSetup;
     select.addEventListener('change', () => {
       selectedSetup = select.value as SetupMode;

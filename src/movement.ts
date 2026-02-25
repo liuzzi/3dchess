@@ -140,15 +140,70 @@ export function getValidMoves(board: Board, piece: Piece): Position3D[] {
   return candidates;
 }
 
+function slideAttacksKing(board: Board, kingPos: Position3D, attacker: Piece, dirs: Dir[]): boolean {
+  for (const [dx, dy, dz] of dirs) {
+    let { x, y, z } = attacker.position;
+    while (true) {
+      x += dx; y += dy; z += dz;
+      if (x === kingPos.x && y === kingPos.y && z === kingPos.z) return true;
+      if (x < 0 || x > 7 || y < 0 || y > 7 || z < 0 || z > 7) break;
+      if (board.getPieceAt({ x, y, z })) break;
+    }
+  }
+  return false;
+}
+
+function stepAttacksKing(kingPos: Position3D, attacker: Piece, dirs: Dir[]): boolean {
+  const ax = attacker.position.x;
+  const ay = attacker.position.y;
+  const az = attacker.position.z;
+  for (const [dx, dy, dz] of dirs) {
+    if (ax + dx === kingPos.x && ay + dy === kingPos.y && az + dz === kingPos.z) return true;
+  }
+  return false;
+}
+
+function pawnAttacksKing(kingPos: Position3D, attacker: Piece): boolean {
+  const fwdDir = attacker.color === PieceColor.White ? 1 : -1;
+  const ax = attacker.position.x;
+  const ay = attacker.position.y;
+  const az = attacker.position.z;
+  
+  if (ay + fwdDir !== kingPos.y) return false;
+  
+  const dx = Math.abs(ax - kingPos.x);
+  const dz = Math.abs(az - kingPos.z);
+  
+  return dx <= 1 && dz <= 1 && !(dx === 0 && dz === 0) && (dx === 1 || dz !== 0);
+}
+
 export function isKingInCheck(board: Board, color: PieceColor): boolean {
   const king = board.findKing(color);
   if (!king) return false;
-
+  
+  const kp = king.position;
   const enemy = color === PieceColor.White ? PieceColor.Black : PieceColor.White;
+  
   for (const p of board.getPiecesOfColor(enemy)) {
-    const moves = getRawMoves(board, p);
-    if (moves.some(m => m.x === king.position.x && m.y === king.position.y && m.z === king.position.z)) {
-      return true;
+    switch (p.type) {
+      case PieceType.Rook:
+        if (slideAttacksKing(board, kp, p, ROOK_DIRS)) return true;
+        break;
+      case PieceType.Bishop:
+        if (slideAttacksKing(board, kp, p, BISHOP_DIRS)) return true;
+        break;
+      case PieceType.Queen:
+        if (slideAttacksKing(board, kp, p, QUEEN_DIRS)) return true;
+        break;
+      case PieceType.Knight:
+        if (stepAttacksKing(kp, p, KNIGHT_MOVES)) return true;
+        break;
+      case PieceType.King:
+        if (stepAttacksKing(kp, p, KING_DIRS)) return true;
+        break;
+      case PieceType.Pawn:
+        if (pawnAttacksKing(kp, p)) return true;
+        break;
     }
   }
   return false;

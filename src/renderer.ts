@@ -9,6 +9,10 @@ export class Renderer {
   private rafId: number | null = null;
   private boundOnResize = () => this.onResize();
 
+  private panOffset = new THREE.Vector2();
+  private targetPanOffset = new THREE.Vector2();
+  private isPanOffsetActive = false;
+
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0a1a);
@@ -34,6 +38,49 @@ export class Renderer {
     this.controls.minDistance = 1;
     this.controls.maxDistance = 40;
     this.controls.update();
+
+    this.controls.enablePan = true;
+
+    // Hook OrbitControls pan to our screen-space pan offset.
+    // This allows the user to pan the view (Shift+LeftClick), but ensures
+    // the 3D orbit pivot ALWAYS remains perfectly locked to the center of the cube.
+    const origPan = (this.controls as any)._pan;
+    (this.controls as any)._pan = (deltaX: number, deltaY: number) => {
+      this.targetPanOffset.x -= deltaX;
+      this.targetPanOffset.y -= deltaY;
+    };
+
+    // We want Ctrl+Drag to rotate the board, not pan. OrbitControls hardcodes Ctrl to pan.
+    // By intercepting pointer events, stripping the ctrlKey, and re-dispatching,
+    // OrbitControls treats it as a normal rotate, while our game layer still sees the keydown.
+    const stripCtrl = (e: PointerEvent) => {
+      if (e.ctrlKey) {
+        e.stopPropagation();
+        const cloned = new PointerEvent(e.type, {
+          pointerId: e.pointerId,
+          pointerType: e.pointerType,
+          isPrimary: e.isPrimary,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          pageX: e.pageX,
+          pageY: e.pageY,
+          screenX: e.screenX,
+          screenY: e.screenY,
+          button: e.button,
+          buttons: e.buttons,
+          bubbles: e.bubbles,
+          cancelable: e.cancelable,
+          ctrlKey: false,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+          metaKey: e.metaKey
+        });
+        e.target?.dispatchEvent(cloned);
+      }
+    };
+    ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'].forEach(t => 
+      canvas.addEventListener(t, stripCtrl as EventListener, { capture: true })
+    );
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     this.scene.add(ambient);
@@ -101,6 +148,33 @@ export class Renderer {
 
   render(): void {
     this.controls.update();
+
+    const dx = this.targetPanOffset.x - this.panOffset.x;
+    const dy = this.targetPanOffset.y - this.panOffset.y;
+    
+    this.panOffset.x += dx * 0.25;
+    this.panOffset.y += dy * 0.25;
+
+    const isActive = Math.abs(this.panOffset.x) > 0.05 || Math.abs(this.panOffset.y) > 0.05;
+
+    if (isActive || this.isPanOffsetActive) {
+      if (isActive) {
+        this.camera.setViewOffset(
+          window.innerWidth,
+          window.innerHeight,
+          this.panOffset.x,
+          this.panOffset.y,
+          window.innerWidth,
+          window.innerHeight
+        );
+      } else {
+        this.camera.clearViewOffset();
+        this.panOffset.set(0, 0);
+        this.targetPanOffset.set(0, 0);
+      }
+      this.isPanOffsetActive = isActive;
+    }
+
     this.webgl.render(this.scene, this.camera);
   }
 

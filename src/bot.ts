@@ -1,12 +1,16 @@
 import { Board } from './board';
 import { getLegalMoves, getValidMoves, isKingInCheck } from './movement';
-import { Piece, PieceColor, Position3D, Difficulty, PieceType } from './types';
+import { Piece, PieceColor, Position3D, Difficulty, PieceType, SetupMode } from './types';
 import type { WorkerRequest, WorkerResponse, RootMove } from './botWorker';
 
 export class Bot {
   private workers: Worker[];
 
-  constructor(public color: PieceColor, public difficulty: Difficulty) {
+  constructor(
+    public color: PieceColor,
+    public difficulty: Difficulty,
+    public setup: SetupMode = 'classic',
+  ) {
     const workerCount = this.getWorkerCount();
     this.workers = Array.from(
       { length: workerCount },
@@ -77,6 +81,7 @@ export class Bot {
       pieces: board.serialize(),
       color: this.color,
       difficulty: this.difficulty,
+      setup: this.setup,
       progressMode: onProgress ? 'detailed' : 'depth',
     }, timeoutMs, onProgress);
   }
@@ -133,6 +138,7 @@ export class Bot {
       pieces: board.serialize(),
       color: this.color,
       difficulty: this.difficulty,
+      setup: this.setup,
     };
     const rootMoves = this.buildRootMoves(board);
     if (rootMoves.length === 0) {
@@ -140,8 +146,11 @@ export class Bot {
     }
 
     const buckets: RootMove[][] = Array.from({ length: this.workers.length }, () => []);
+    
+    // Distribute by picking 1st to worker 1, 2nd to worker 2... 
+    // Since rootMoves are already sorted by quality, this distributes the heaviest expected workloads evenly
     for (let i = 0; i < rootMoves.length; i++) {
-      buckets[i % buckets.length].push(rootMoves[i]);
+      buckets[i % this.workers.length].push(rootMoves[i]);
     }
 
     const settled = await Promise.allSettled(
@@ -203,36 +212,68 @@ export class Bot {
     };
   }
 
+  private emergencyFallbackMove(board: Board): { piece: Piece; to: Position3D } | null {
+    const pieceValue = (type: PieceType): number => {
+      switch (type) {
+        case PieceType.Pawn: return 100;
+        case PieceType.Knight: return 320;
+        case PieceType.Bishop: return 330;
+        case PieceType.Rook: return 500;
+        case PieceType.Queen: return 900;
+        case PieceType.King: return 10_000;
+      }
+    };
+
+    let best: { piece: Piece; to: Position3D; score: number } | null = null;
+    for (const piece of board.getPiecesOfColor(this.color)) {
+      for (const to of getLegalMoves(board, piece)) {
+        const captured = board.getPieceAt(to);
+        const score = captured ? (pieceValue(captured.type) * 10 - pieceValue(piece.type)) : 0;
+        if (!best || score > best.score) {
+          best = { piece, to, score };
+        }
+      }
+    }
+    if (!best) return null;
+    return { piece: best.piece, to: best.to };
+  }
+
   async pickMove(
     board: Board,
     onProgress?: (resp: WorkerResponse) => void,
   ): Promise<{ piece: Piece; to: Position3D }> {
-    let resp: WorkerResponse;
-    if (this.workers.length > 1) {
-      try {
-        resp = await this.pickMoveParallel(board, onProgress);
-      } catch {
-        // Strict fallback to single search path if parallel orchestration fails.
+    try {
+      let resp: WorkerResponse;
+      if (this.workers.length > 1) {
+        try {
+          resp = await this.pickMoveParallel(board, onProgress);
+        } catch {
+          // Strict fallback to single search path if parallel orchestration fails.
+          resp = await this.pickMoveSingle(board, onProgress);
+        }
+      } else {
         resp = await this.pickMoveSingle(board, onProgress);
       }
-    } else {
-      resp = await this.pickMoveSingle(board, onProgress);
-    }
 
-    if (resp.type === 'error') {
-      throw new Error(resp.error);
+      if (resp.type === 'error') {
+        throw new Error(resp.error);
+      }
+      const piece = board.getPieceAt(resp.fromPos!);
+      if (!piece) {
+        throw new Error('Worker returned invalid piece position');
+      }
+      const legal = getLegalMoves(board, piece).some(m =>
+        m.x === resp.to!.x && m.y === resp.to!.y && m.z === resp.to!.z,
+      );
+      if (!legal) {
+        throw new Error('Worker returned illegal move');
+      }
+      return { piece, to: resp.to! };
+    } catch {
+      const fallback = this.emergencyFallbackMove(board);
+      if (fallback) return fallback;
+      throw new Error('Bot has no legal moves');
     }
-    const piece = board.getPieceAt(resp.fromPos!);
-    if (!piece) {
-      throw new Error('Worker returned invalid piece position');
-    }
-    const legal = getLegalMoves(board, piece).some(m =>
-      m.x === resp.to!.x && m.y === resp.to!.y && m.z === resp.to!.z,
-    );
-    if (!legal) {
-      throw new Error('Worker returned illegal move');
-    }
-    return { piece, to: resp.to! };
   }
 
   terminate(): void {

@@ -90,6 +90,10 @@
       <input id="my-threats-checkbox" type="checkbox" checked />
       <span>Show My Threats</span>
     </label>
+    <label id="show-protected-control" for="show-protected-checkbox">
+      <input id="show-protected-checkbox" type="checkbox" checked />
+      <span>Show Protected</span>
+    </label>
     <label id="ai-thinking-fx-control" for="ai-thinking-fx-checkbox">
       <input id="ai-thinking-fx-checkbox" type="checkbox" />
       <span>AI Thinking FX</span>
@@ -122,11 +126,27 @@
         <div id="captured-black" class="captured-row"></div>
       </div>
     </div>
+    <button
+      id="side-panel-toggle"
+      class="panel-toggle-btn panel-toggle-btn-right game-hidden"
+      type="button"
+      aria-label="Hide side panel"
+      aria-controls="side-panel"
+      aria-expanded="true"
+    >&gt;</button>
   </div>
   <div id="move-panel" class="game-hidden">
     <div id="move-panel-title">Legal Moves</div>
     <div id="move-panel-empty">Select a piece to see moves</div>
     <div id="move-options" aria-live="polite"></div>
+    <button
+      id="move-panel-toggle"
+      class="panel-toggle-btn panel-toggle-btn-left game-hidden"
+      type="button"
+      aria-label="Hide legal moves panel"
+      aria-controls="move-panel"
+      aria-expanded="true"
+    >&lt;</button>
   </div>
   <div id="promo-modal" class="modal-hidden game-hidden">
     <div id="promo-modal-inner">

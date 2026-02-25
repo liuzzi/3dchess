@@ -35,8 +35,8 @@ export function posEqual(a: Position3D, b: Position3D): boolean {
   return a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
-export function posKey(p: Position3D): string {
-  return `${p.x},${p.y},${p.z}`;
+export function posKey(p: Position3D): number {
+  return (p.x & 7) | ((p.y & 7) << 3) | ((p.z & 7) << 6);
 }
 
 /**
@@ -58,7 +58,7 @@ export interface HistoryEntry {
 }
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
-export type SetupMode = 'classic' | 'barricade';
+export type SetupMode = 'classic' | 'barricade' | 'pawnWall';
 
 export interface GameMode {
   type: 'local' | 'bot' | 'online';

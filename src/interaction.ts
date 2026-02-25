@@ -22,11 +22,11 @@ export class Interaction {
   private canHoverPiece: ((piece: Piece) => boolean) | null = null;
   private board: Board | null = null;
   private pieceView: PieceView | null = null;
-  private highlightedKeys = new Set<string>();
+  private highlightedKeys = new Set<number>();
   private pathPreviewActive = false;
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
   private longPressPiece: Piece | null = null;
-  private selectedKey: string | null = null;
+  private selectedKey: number | null = null;
   private ac = new AbortController();
 
   constructor(
@@ -67,7 +67,7 @@ export class Interaction {
     this.canHoverPiece = cb;
   }
 
-  setSelectedKey(key: string | null): void {
+  setSelectedKey(key: number | null): void {
     this.selectedKey = key;
   }
 
@@ -79,7 +79,7 @@ export class Interaction {
     this.pieceView = pv;
   }
 
-  setHighlightedCells(keys: Set<string>): void {
+  setHighlightedCells(keys: Set<number>): void {
     this.highlightedKeys = keys;
   }
 

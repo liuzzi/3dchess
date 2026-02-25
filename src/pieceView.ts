@@ -7,19 +7,23 @@ const BLACK_COLOR = 0x2a2a3e;
 const PIECE_SCALE = 0.35;
 const OUTLINE_BASE_OPACITY = 0.25;
 const OUTLINE_HOVER_OPACITY = 0.72;
+const OUTLINE_SELECTED_OPACITY = 0.55;
 const OUTLINE_BASE_SCALE = 1.1;
 const OUTLINE_HOVER_SCALE = 1.18;
+const OUTLINE_SELECTED_SCALE = 1.14;
 const OUTLINE_BASE_WHITE = 0xffffff;
 const OUTLINE_BASE_BLACK = 0x000000;
 const OUTLINE_HOVER_WHITE = 0x44ccff;
 const OUTLINE_HOVER_BLACK = 0x8888ff;
+const OUTLINE_SELECTED_WHITE = 0xffcc44;
+const OUTLINE_SELECTED_BLACK = 0xddaa33;
 
 export class PieceView {
   group: THREE.Group;
   private meshes = new Map<Piece, THREE.Group>();
   private hoveredPiece: Piece | null = null;
   private selectedPiece: Piece | null = null;
-  private highlightedPiece: Piece | null = null;
+  private _styledPieces = new Map<Piece, 'hover' | 'selected'>();
 
   constructor() {
     this.group = new THREE.Group();
@@ -37,9 +41,7 @@ export class PieceView {
         if (this.selectedPiece === piece) {
           this.selectedPiece = null;
         }
-        if (this.highlightedPiece === piece) {
-          this.highlightedPiece = null;
-        }
+        this._styledPieces.delete(piece);
         this.group.remove(mesh);
         this.meshes.delete(piece);
       }
@@ -209,37 +211,63 @@ export class PieceView {
     this.updateHighlightState();
   }
 
-  private applyOutlineState(piece: Piece, highlighted: boolean): void {
+  private applyOutlineStyle(
+    piece: Piece,
+    style: 'base' | 'hover' | 'selected',
+  ): void {
     const group = this.meshes.get(piece);
     if (!group) return;
     const outlineMat = group.userData.outlineMat as THREE.MeshBasicMaterial | undefined;
     const outlineMeshes = group.userData.outlineMeshes as THREE.Mesh[] | undefined;
     if (!outlineMat) return;
 
-    outlineMat.opacity = highlighted ? OUTLINE_HOVER_OPACITY : OUTLINE_BASE_OPACITY;
-    outlineMat.color.setHex(
-      highlighted
-        ? (piece.color === PieceColor.White ? OUTLINE_HOVER_WHITE : OUTLINE_HOVER_BLACK)
-        : (piece.color === PieceColor.White ? OUTLINE_BASE_WHITE : OUTLINE_BASE_BLACK),
-    );
-    const scale = highlighted ? OUTLINE_HOVER_SCALE : OUTLINE_BASE_SCALE;
+    const isWhite = piece.color === PieceColor.White;
+    let opacity: number;
+    let color: number;
+    let scale: number;
+
+    switch (style) {
+      case 'hover':
+        opacity = OUTLINE_HOVER_OPACITY;
+        color = isWhite ? OUTLINE_HOVER_WHITE : OUTLINE_HOVER_BLACK;
+        scale = OUTLINE_HOVER_SCALE;
+        break;
+      case 'selected':
+        opacity = OUTLINE_SELECTED_OPACITY;
+        color = isWhite ? OUTLINE_SELECTED_WHITE : OUTLINE_SELECTED_BLACK;
+        scale = OUTLINE_SELECTED_SCALE;
+        break;
+      default:
+        opacity = OUTLINE_BASE_OPACITY;
+        color = isWhite ? OUTLINE_BASE_WHITE : OUTLINE_BASE_BLACK;
+        scale = OUTLINE_BASE_SCALE;
+        break;
+    }
+
+    outlineMat.opacity = opacity;
+    outlineMat.color.setHex(color);
     outlineMeshes?.forEach((outline) => {
       outline.scale.setScalar(scale);
     });
   }
 
   private updateHighlightState(): void {
-    const nextPiece = this.selectedPiece ?? this.hoveredPiece;
-    const currentPiece = this.highlightedPiece;
+    const next = new Map<Piece, 'hover' | 'selected'>();
 
-    if (currentPiece === nextPiece) return;
+    if (this.selectedPiece && this.hoveredPiece && this.selectedPiece === this.hoveredPiece) {
+      next.set(this.selectedPiece, 'hover');
+    } else {
+      if (this.selectedPiece) next.set(this.selectedPiece, 'selected');
+      if (this.hoveredPiece) next.set(this.hoveredPiece, 'hover');
+    }
 
-    if (currentPiece) {
-      this.applyOutlineState(currentPiece, false);
+    for (const [piece] of this._styledPieces) {
+      if (!next.has(piece)) this.applyOutlineStyle(piece, 'base');
     }
-    this.highlightedPiece = nextPiece;
-    if (nextPiece) {
-      this.applyOutlineState(nextPiece, true);
+    for (const [piece, style] of next) {
+      if (this._styledPieces.get(piece) !== style) this.applyOutlineStyle(piece, style);
     }
+
+    this._styledPieces = next;
   }
 }
