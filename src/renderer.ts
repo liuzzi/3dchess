@@ -62,8 +62,6 @@ export class Renderer {
           isPrimary: e.isPrimary,
           clientX: e.clientX,
           clientY: e.clientY,
-          pageX: e.pageX,
-          pageY: e.pageY,
           screenX: e.screenX,
           screenY: e.screenY,
           button: e.button,
