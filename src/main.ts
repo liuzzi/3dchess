@@ -883,7 +883,9 @@ async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promis
   network = new Network();
 
   try {
-    const peerId = await network.host();
+    const peerId = await network.host((msg) => {
+      // Lobby isn't up yet, no-op for host init progress
+    });
     const base = window.location.href.split('#')[0];
     const inviteUrl = `${base}#online:${peerId}:${localColor}:${setup}`;
 
@@ -892,7 +894,9 @@ async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promis
     const statusEl = document.getElementById('lobby-status')!;
     statusEl.textContent = 'Waiting for opponent connection...';
 
-    await network.waitForGuest();
+    await network.waitForGuest((msg) => {
+      statusEl.textContent = msg;
+    });
     if (onlineFlowCancelled || !network) return;
     statusEl.textContent = 'Opponent connected. Verifying session...';
 
@@ -951,7 +955,9 @@ async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor, setup
   lobby.style.display = 'flex';
 
   try {
-    await network.join(hostPeerId);
+    await network.join(hostPeerId, (msg) => {
+      statusEl.textContent = msg;
+    });
     if (onlineFlowCancelled || !network) return;
     statusEl.textContent = 'Connected. Negotiating session...';
 

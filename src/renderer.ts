@@ -96,27 +96,108 @@ export class Renderer {
     window.addEventListener('resize', this.boundOnResize);
   }
 
+  private xLabels: THREE.Sprite[] = [];
+  private yLabels: THREE.Sprite[] = [];
+  private zLabels: THREE.Sprite[] = [];
+
   private addAxisLabels(): void {
     // x-axis: columns (a-h) along 3D X
     const colLabels = ['a','b','c','d','e','f','g','h'];
     for (let i = 0; i < 8; i++) {
       const sprite = this.makeTextSprite(colLabels[i], 0x6688bb);
-      sprite.position.set(i, -0.8, -0.8);
       this.scene.add(sprite);
+      this.xLabels.push(sprite);
     }
 
     // Board y (rows 1-8) renders along 3D Z (depth)
     for (let i = 0; i < 8; i++) {
       const sprite = this.makeTextSprite(String(i + 1), 0x6688bb);
-      sprite.position.set(-0.8, -0.8, i);
       this.scene.add(sprite);
+      this.yLabels.push(sprite);
     }
 
     // Board z (layers L1-L8) renders along 3D Y (vertical)
     for (let i = 0; i < 8; i++) {
       const sprite = this.makeTextSprite(`L${i + 1}`, 0x8866bb);
-      sprite.position.set(-0.8, i, -0.8);
       this.scene.add(sprite);
+      this.zLabels.push(sprite);
+    }
+    
+    this.updateAxisLabels();
+  }
+
+  private updateAxisLabels(): void {
+    const minBound = -1.0;
+    const maxBound = 8.0;
+
+    this.camera.updateMatrixWorld();
+    const screenUp = new THREE.Vector3(0, 1, 0).transformDirection(this.camera.matrixWorld);
+    const screenRight = new THREE.Vector3(1, 0, 0).transformDirection(this.camera.matrixWorld);
+
+    // X Labels (columns a-h)
+    const cornersYZ = [
+      { y: minBound, z: minBound },
+      { y: maxBound, z: minBound },
+      { y: minBound, z: maxBound },
+      { y: maxBound, z: maxBound }
+    ];
+
+    cornersYZ.sort((a, b) => {
+      const dotA = new THREE.Vector3(3.5, a.y, a.z).dot(screenUp);
+      const dotB = new THREE.Vector3(3.5, b.y, b.z).dot(screenUp);
+      if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB;
+      const distA = new THREE.Vector3(3.5, a.y, a.z).distanceToSquared(this.camera.position);
+      const distB = new THREE.Vector3(3.5, b.y, b.z).distanceToSquared(this.camera.position);
+      return distA - distB;
+    });
+
+    const bottomMostYZ = cornersYZ[0];
+    for (let i = 0; i < 8; i++) {
+      this.xLabels[i].position.set(i, bottomMostYZ.y, bottomMostYZ.z);
+    }
+
+    // Y Labels (rows 1-8, deep along Z)
+    const cornersXY = [
+      { x: minBound, y: minBound },
+      { x: maxBound, y: minBound },
+      { x: minBound, y: maxBound },
+      { x: maxBound, y: maxBound }
+    ];
+
+    cornersXY.sort((a, b) => {
+      const dotA = new THREE.Vector3(a.x, a.y, 3.5).dot(screenUp);
+      const dotB = new THREE.Vector3(b.x, b.y, 3.5).dot(screenUp);
+      if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB;
+      const distA = new THREE.Vector3(a.x, a.y, 3.5).distanceToSquared(this.camera.position);
+      const distB = new THREE.Vector3(b.x, b.y, 3.5).distanceToSquared(this.camera.position);
+      return distA - distB;
+    });
+
+    const bottomMostXY = cornersXY[0];
+    for (let i = 0; i < 8; i++) {
+      this.yLabels[i].position.set(bottomMostXY.x, bottomMostXY.y, i);
+    }
+
+    // Z Labels (layers L1-L8, vertical along Y)
+    const cornersXZ = [
+      { x: minBound, z: minBound },
+      { x: maxBound, z: minBound },
+      { x: minBound, z: maxBound },
+      { x: maxBound, z: maxBound }
+    ];
+
+    cornersXZ.sort((a, b) => {
+      const dotA = new THREE.Vector3(a.x, 3.5, a.z).dot(screenRight);
+      const dotB = new THREE.Vector3(b.x, 3.5, b.z).dot(screenRight);
+      if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB; // Minimum dot is leftmost
+      const distA = new THREE.Vector3(a.x, 3.5, a.z).distanceToSquared(this.camera.position);
+      const distB = new THREE.Vector3(b.x, 3.5, b.z).distanceToSquared(this.camera.position);
+      return distA - distB;
+    });
+    
+    const leftCorner = cornersXZ[0];
+    for (let i = 0; i < 8; i++) {
+      this.zLabels[i].position.set(leftCorner.x, i, leftCorner.z);
     }
   }
 
@@ -146,6 +227,7 @@ export class Renderer {
 
   render(): void {
     this.controls.update();
+    this.updateAxisLabels();
 
     const dx = this.targetPanOffset.x - this.panOffset.x;
     const dy = this.targetPanOffset.y - this.panOffset.y;

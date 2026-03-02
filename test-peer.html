@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<body>
+<script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<script>
+  const host = new Peer();
+  host.on('open', (id) => {
+    console.log('host open', id);
+    const guest = new Peer();
+    guest.on('open', () => {
+      console.log('guest open');
+      const conn = guest.connect(id, { reliable: true });
+      conn.on('open', () => console.log('guest conn open'));
+    });
+    host.on('connection', (conn) => {
+      console.log('host got connection');
+      conn.on('open', () => console.log('host conn open'));
+    });
+  });
+</script>
+</body>
+</html>

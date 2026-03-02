@@ -2,7 +2,7 @@ import Peer, { DataConnection } from 'peerjs';
 import { PieceColor, PieceType, Position3D, SetupMode } from './types';
 
 const PEER_OPEN_TIMEOUT_MS = 15000;
-const CONNECTION_TIMEOUT_MS = 25000;
+const CONNECTION_TIMEOUT_MS = 35000;
 const HANDSHAKE_TIMEOUT_MS = 12000;
 const PROTOCOL_VERSION = 1;
 
@@ -66,7 +66,7 @@ export class Network {
    * Host a game. Returns a promise that resolves with the peer ID
    * once the peer is registered with the signaling server.
    */
-  host(): Promise<string> {
+  host(onProgress?: (msg: string) => void): Promise<string> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timeoutId = window.setTimeout(() => {
@@ -74,7 +74,9 @@ export class Network {
         settled = true;
         reject(new Error('Timed out initializing online host'));
       }, PEER_OPEN_TIMEOUT_MS);
-      this.peer = new Peer();
+      
+      if (onProgress) onProgress('Initializing peer network...');
+      this.peer = new Peer({ debug: 2 });
 
       this.peer.on('open', (id) => {
         if (settled) return;
@@ -101,7 +103,7 @@ export class Network {
    * Wait for a guest to connect. Returns a promise that resolves
    * once the data channel is open and ready.
    */
-  waitForGuest(): Promise<void> {
+  waitForGuest(onProgress?: (msg: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.peer) {
         reject(new Error('Host peer is not initialized'));
@@ -109,45 +111,44 @@ export class Network {
       }
 
       let settled = false;
-      const timeoutId = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error('Timed out waiting for opponent to connect'));
-      }, CONNECTION_TIMEOUT_MS);
 
       const resolveOnce = () => {
         if (settled) return;
         settled = true;
-        window.clearTimeout(timeoutId);
         resolve();
       };
 
       const rejectOnce = (err: Error) => {
         if (settled) return;
         settled = true;
-        window.clearTimeout(timeoutId);
         reject(err);
       };
 
-      const watchConnection = (conn: DataConnection) => {
-        this.conn = conn;
+      if (onProgress) onProgress('Waiting for opponent connection...');
 
+      const watchConnection = (conn: DataConnection) => {
         if (conn.open) {
+          this.conn = conn;
           resolveOnce();
           return;
         }
 
-        conn.on('open', () => resolveOnce());
-        conn.on('error', () => rejectOnce(new Error('Opponent connection failed')));
-        conn.on('close', () => rejectOnce(new Error('Opponent disconnected before game start')));
+        conn.on('open', () => {
+          this.conn = conn;
+          resolveOnce();
+        });
+        
+        // DO NOT reject the session if a single incoming connection attempt closes/errors.
+        // The guest might be experiencing ICE failures and retrying. We only reject on global error.
+        conn.on('error', (err) => console.warn('[Network] Incoming connection errored:', err));
+        conn.on('close', () => console.warn('[Network] Incoming connection closed before open'));
       };
 
       if (this.conn) {
         watchConnection(this.conn);
-        return;
       }
 
-      this.peer.once('connection', (conn) => {
+      this.peer.on('connection', (conn) => {
         watchConnection(conn);
       });
 
@@ -161,7 +162,7 @@ export class Network {
    * Join a host's game by their peer ID. Returns a promise that
    * resolves once the data channel is open.
    */
-  join(hostPeerId: string): Promise<void> {
+  join(hostPeerId: string, onProgress?: (msg: string) => void): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timeoutId = window.setTimeout(() => {
@@ -184,26 +185,79 @@ export class Network {
         reject(err);
       };
 
-      this.peer = new Peer();
+      if (onProgress) onProgress('Connecting to signaling server...');
+      this.peer = new Peer({ debug: 2 });
 
       this.peer.on('open', () => {
-        const conn = this.peer!.connect(hostPeerId, { reliable: true });
-        this.conn = conn;
-        this.wireConnection(conn);
+        let attempt = 0;
+        let currentConn: DataConnection | null = null;
+        let retryTimer: number | null = null;
 
-        conn.on('open', () => {
-          resolveOnce();
-        });
-        conn.on('error', () => {
-          rejectOnce(new Error('Unable to open connection to host'));
-        });
-        conn.on('close', () => {
-          rejectOnce(new Error('Host closed connection before game start'));
-        });
+        const attemptConnect = () => {
+          if (settled) return;
+          attempt++;
+          if (currentConn) {
+            currentConn.close();
+          }
+          if (retryTimer) {
+            window.clearTimeout(retryTimer);
+          }
+
+          if (onProgress) onProgress(`Negotiating P2P connection (Attempt ${attempt})...`);
+          
+          currentConn = this.peer!.connect(hostPeerId);
+          this.conn = currentConn;
+          this.wireConnection(currentConn);
+
+          if (currentConn.open) {
+            resolveOnce();
+            return;
+          }
+
+          currentConn.on('open', () => {
+            if (retryTimer) window.clearTimeout(retryTimer);
+            resolveOnce();
+          });
+
+          currentConn.on('error', (err) => {
+            console.warn('[Network] Connect attempt errored:', err);
+          });
+
+          // Fast-fail and retry on WebRTC ICE failure
+          const pc = currentConn.peerConnection;
+          if (pc) {
+            pc.addEventListener('iceconnectionstatechange', () => {
+              console.log('[Network] ICE State:', pc.iceConnectionState);
+              if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                if (!settled && attempt < 3) {
+                  console.warn('[Network] ICE failed, retrying connection...');
+                  window.setTimeout(attemptConnect, 500);
+                } else if (!settled) {
+                  rejectOnce(new Error('Network firewall completely blocked P2P connection.'));
+                }
+              }
+            });
+          }
+
+          retryTimer = window.setTimeout(() => {
+            if (!settled && attempt < 3) {
+              console.warn('[Network] Connect attempt stalled, retrying...');
+              attemptConnect();
+            }
+          }, 8000);
+        };
+
+        attemptConnect();
       });
 
       this.peer.on('error', (err) => {
-        rejectOnce(err instanceof Error ? err : new Error('Guest peer signaling error'));
+        if (err.type === 'peer-unavailable') {
+          rejectOnce(new Error('Host is offline or link is invalid.'));
+        } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'socket-closed') {
+          rejectOnce(new Error(`Connection infrastructure error: ${err.message || err.type}`));
+        } else {
+          console.warn('[Network] Guest peer error:', err.type, err);
+        }
       });
     });
   }
