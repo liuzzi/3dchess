@@ -11,11 +11,7 @@ export class Bot {
     public difficulty: Difficulty,
     public setup: SetupMode = 'classic',
   ) {
-    const workerCount = this.getWorkerCount();
-    this.workers = Array.from(
-      { length: workerCount },
-      () => new Worker(new URL('./botWorker.ts', import.meta.url), { type: 'module' }),
-    );
+    this.workers = this.createWorkers();
   }
 
   private getWorkerCount(): number {
@@ -25,13 +21,26 @@ export class Bot {
     return cores <= 2 ? 1 : 2;
   }
 
+  private createWorkers(): Worker[] {
+    const workerCount = this.getWorkerCount();
+    return Array.from(
+      { length: workerCount },
+      () => new Worker(new URL('./botWorker.ts', import.meta.url), { type: 'module' }),
+    );
+  }
+
   private requestWorker(
     worker: Worker,
     req: WorkerRequest,
     timeoutMs = 22000,
     onProgress?: (resp: WorkerResponse) => void,
+    signal?: AbortSignal,
   ): Promise<WorkerResponse> {
     return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException('AI search aborted', 'AbortError'));
+        return;
+      }
       let latestProgress: WorkerResponse | null = null;
       const timeoutId = window.setTimeout(() => {
         cleanup();
@@ -60,14 +69,20 @@ export class Bot {
         cleanup();
         reject(err);
       };
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException('AI search aborted', 'AbortError'));
+      };
       const cleanup = () => {
         window.clearTimeout(timeoutId);
         worker.removeEventListener('message', onMessage);
         worker.removeEventListener('error', onError);
+        signal?.removeEventListener('abort', onAbort);
       };
 
       worker.addEventListener('message', onMessage);
       worker.addEventListener('error', onError);
+      signal?.addEventListener('abort', onAbort, { once: true });
       worker.postMessage(req);
     });
   }
@@ -75,6 +90,7 @@ export class Bot {
   private pickMoveSingle(
     board: Board,
     onProgress?: (resp: WorkerResponse) => void,
+    signal?: AbortSignal,
   ): Promise<WorkerResponse> {
     const timeoutMs = this.difficulty === 'hard' ? 22000 : this.difficulty === 'medium' ? 12000 : 8000;
     return this.requestWorker(this.workers[0], {
@@ -83,7 +99,7 @@ export class Bot {
       difficulty: this.difficulty,
       setup: this.setup,
       progressMode: onProgress ? 'detailed' : 'depth',
-    }, timeoutMs, onProgress);
+    }, timeoutMs, onProgress, signal);
   }
 
   private buildRootMoves(board: Board): RootMove[] {
@@ -133,6 +149,7 @@ export class Bot {
   private async pickMoveParallel(
     board: Board,
     onProgress?: (resp: WorkerResponse) => void,
+    signal?: AbortSignal,
   ): Promise<WorkerResponse> {
     const reqBase: Omit<WorkerRequest, 'rootMoves'> = {
       pieces: board.serialize(),
@@ -162,6 +179,7 @@ export class Bot {
           { ...reqBase, rootMoves: x.moves, progressMode: onProgress ? 'detailed' : 'depth' },
           22000,
           onProgress,
+          signal,
         )),
     );
 
@@ -182,7 +200,7 @@ export class Bot {
     const maxDepth = completedDepths.length > 0 ? Math.max(...completedDepths) : 1;
     const depthSpread = maxDepth - commonDepth;
     if (depthSpread > 2) {
-      return this.pickMoveSingle(board, onProgress);
+      return this.pickMoveSingle(board, onProgress, signal);
     }
 
     const comparable = results
@@ -197,7 +215,7 @@ export class Bot {
       });
 
     if (comparable.some(c => !c.fromPos || !c.to || !Number.isFinite(c.score))) {
-      return this.pickMoveSingle(board, onProgress);
+      return this.pickMoveSingle(board, onProgress, signal);
     }
 
     comparable.sort((a, b) => b.score - a.score);
@@ -241,18 +259,22 @@ export class Bot {
   async pickMove(
     board: Board,
     onProgress?: (resp: WorkerResponse) => void,
+    signal?: AbortSignal,
   ): Promise<{ piece: Piece; to: Position3D }> {
     try {
       let resp: WorkerResponse;
       if (this.workers.length > 1) {
         try {
-          resp = await this.pickMoveParallel(board, onProgress);
-        } catch {
+          resp = await this.pickMoveParallel(board, onProgress, signal);
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            throw error;
+          }
           // Strict fallback to single search path if parallel orchestration fails.
-          resp = await this.pickMoveSingle(board, onProgress);
+          resp = await this.pickMoveSingle(board, onProgress, signal);
         }
       } else {
-        resp = await this.pickMoveSingle(board, onProgress);
+        resp = await this.pickMoveSingle(board, onProgress, signal);
       }
 
       if (resp.type === 'error') {
@@ -269,11 +291,19 @@ export class Bot {
         throw new Error('Worker returned illegal move');
       }
       return { piece, to: resp.to! };
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        throw error;
+      }
       const fallback = this.emergencyFallbackMove(board);
       if (fallback) return fallback;
       throw new Error('Bot has no legal moves');
     }
+  }
+
+  cancelThinking(): void {
+    this.terminate();
+    this.workers = this.createWorkers();
   }
 
   terminate(): void {

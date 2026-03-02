@@ -41,6 +41,7 @@ let isAnimatingMove = false;
 let moveAnimationToken = 0;
 let moveAnimationQueue: Promise<void> = Promise.resolve();
 let botTurnToken = 0;
+let activeBotAbortController: AbortController | null = null;
 let lastAiFxBeepAt = 0;
 let aiThinkingDepthArrowHoldUntil = 0;
 let isCtrlPressed = false;
@@ -136,6 +137,20 @@ function stopAiThinkingFx(): void {
   if (boardView) {
     boardView.clearThinkingLines();
   }
+}
+
+function interruptBotThinking(): void {
+  if (!activeBotAbortController && !game?.botThinking) return;
+  botTurnToken++;
+  activeBotAbortController?.abort();
+  activeBotAbortController = null;
+  if (bot) {
+    bot.cancelThinking();
+  }
+  if (game) {
+    game.botThinking = false;
+  }
+  stopAiThinkingFx();
 }
 
 function startAiThinkingFx(turnToken: number): void {
@@ -644,6 +659,7 @@ function initGame(mode: GameMode): void {
         interaction.setBoard(game.board);
         break;
       case 'undo': {
+        interruptBotThinking();
         stopAiThinkingFx();
         hoverPreviewTargetKey = null;
         moveAnimationToken++;
@@ -678,6 +694,8 @@ function initGame(mode: GameMode): void {
 async function handleBotTurn(): Promise<void> {
   if (!bot || !game) return;
   const turnToken = ++botTurnToken;
+  const abortController = new AbortController();
+  activeBotAbortController = abortController;
   startAiThinkingFx(turnToken);
 
   const statusEl = document.getElementById('game-status')!;
@@ -711,6 +729,7 @@ async function handleBotTurn(): Promise<void> {
     const move = await bot.pickMove(
       game.board,
       onProgress,
+      abortController.signal,
     );
     if (turnToken !== botTurnToken) return;
     if (bot.difficulty === 'easy') {
@@ -730,7 +749,10 @@ async function handleBotTurn(): Promise<void> {
     if (!moved) {
       throw new Error('Bot produced illegal move at execution time');
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return;
+    }
     if (!game || turnToken !== botTurnToken) return;
     game.botThinking = false;
     statusEl.textContent = '';
@@ -740,6 +762,9 @@ async function handleBotTurn(): Promise<void> {
       console.debug(
         `[AI FX] turn=${turnToken} depthEvents=${fxDiag.depthEvents} depthEventsWithSubtree=${fxDiag.depthEventsWithSubtree} maxPvLen=${fxDiag.maxPvLen} maxDepth=${fxDiag.maxDepth} thinkMs=${elapsed}`,
       );
+    }
+    if (activeBotAbortController === abortController) {
+      activeBotAbortController = null;
     }
     if (turnToken === botTurnToken) stopAiThinkingFx();
   }
@@ -846,6 +871,13 @@ function hideLobby(): void {
   lobby.style.display = 'none';
 }
 
+function describeOnlineError(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+  return fallback;
+}
+
 async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promise<void> {
   onlineFlowCancelled = false;
   network = new Network();
@@ -857,16 +889,41 @@ async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promis
 
     hideMenu();
     showLobby(inviteUrl);
+    const statusEl = document.getElementById('lobby-status')!;
+    statusEl.textContent = 'Waiting for opponent connection...';
 
     await network.waitForGuest();
+    if (onlineFlowCancelled || !network) return;
+    statusEl.textContent = 'Opponent connected. Verifying session...';
+
+    const hello = await network.waitForHello();
+    if (!network.isProtocolCompatible(hello.protocolVersion)) {
+      throw new Error('Incompatible game version with opponent');
+    }
+    if (hello.hostColor !== localColor || hello.setup !== setup) {
+      throw new Error('Invite link settings do not match host session');
+    }
+
+    network.sendReady();
+    statusEl.textContent = 'Finalizing game start...';
+    await network.waitForReady();
     if (onlineFlowCancelled || !network) return;
 
     hideLobby();
     showGame();
-    network.sendStart();
     initGame({ type: 'online', localColor, setup });
+    network.sendStart();
   } catch (err) {
+    if (onlineFlowCancelled) return;
     console.error('Failed to host online game:', err);
+    const lobbyTitle = document.getElementById('lobby-title')!;
+    const statusEl = document.getElementById('lobby-status')!;
+    lobbyTitle.textContent = 'Connection failed';
+    lobbyTitle.style.animation = 'none';
+    statusEl.textContent = `${describeOnlineError(
+      err,
+      'Could not start online session.',
+    )}. Try creating a fresh invite link.`;
     network.disconnect();
     network = null;
   }
@@ -884,25 +941,40 @@ async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor, setup
   const lobbyTitle = document.getElementById('lobby-title')!;
   const linkRow = document.getElementById('lobby-link-row')!;
   const statusEl = document.getElementById('lobby-status')!;
+  const backBtn = document.getElementById('lobby-back-btn') as HTMLButtonElement;
 
   lobbyTitle.textContent = 'Connecting...';
   lobbyTitle.style.animation = 'lobbyPulse 2s ease-in-out infinite';
   linkRow.style.display = 'none';
-  statusEl.textContent = `You are playing as ${localColor}`;
+  backBtn.style.display = '';
+  statusEl.textContent = `You are playing as ${localColor}. Attempting to connect...`;
   lobby.style.display = 'flex';
 
   try {
     await network.join(hostPeerId);
+    if (onlineFlowCancelled || !network) return;
+    statusEl.textContent = 'Connected. Negotiating session...';
+
+    network.sendHello(hostColor, setup);
+    await network.waitForReady();
+    if (onlineFlowCancelled || !network) return;
+    network.sendReady();
+    statusEl.textContent = 'Waiting for host to start game...';
+    await network.waitForStart();
     if (onlineFlowCancelled || !network) return;
 
     hideLobby();
     showGame();
     initGame({ type: 'online', localColor, setup });
   } catch (err) {
+    if (onlineFlowCancelled) return;
     console.error('Failed to join online game:', err);
     lobbyTitle.textContent = 'Connection failed';
     lobbyTitle.style.animation = 'none';
-    statusEl.textContent = 'Could not connect to host. The link may be expired.';
+    statusEl.textContent = `${describeOnlineError(
+      err,
+      'Could not connect to host',
+    )}. The link may be expired or the host may be offline.`;
     network.disconnect();
     network = null;
   }

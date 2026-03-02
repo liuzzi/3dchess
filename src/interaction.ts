@@ -83,6 +83,15 @@ export class Interaction {
     this.highlightedKeys = keys;
   }
 
+  private setRayFromClient(clientX: number, clientY: number): void {
+    const rect = this.renderer.webgl.domElement.getBoundingClientRect();
+    const nx = (clientX - rect.left) / rect.width;
+    const ny = (clientY - rect.top) / rect.height;
+    this.mouse.x = nx * 2 - 1;
+    this.mouse.y = -ny * 2 + 1;
+    this.raycaster.setFromCamera(this.mouse, this.renderer.camera);
+  }
+
   private onPointerDown(e: PointerEvent): void {
     if (e.button === 2) {
       this.beginPathPreview(e.clientX, e.clientY);
@@ -185,9 +194,7 @@ export class Interaction {
   private raycastClosestHighlighted(clientX: number, clientY: number): Position3D | null {
     if (this.highlightedKeys.size === 0) return null;
 
-    this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
-    this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
-    this.raycaster.setFromCamera(this.mouse, this.renderer.camera);
+    this.setRayFromClient(clientX, clientY);
 
     const meshes = this.boardView.getAllCellMeshes();
     const intersects = this.raycaster.intersectObjects(meshes, false);
@@ -202,34 +209,34 @@ export class Interaction {
   }
 
   private raycastBestCell(clientX: number, clientY: number): Position3D | null {
-    this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
-    this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.mouse, this.renderer.camera);
+    this.setRayFromClient(clientX, clientY);
 
     const cellMeshes = this.boardView.getAllCellMeshes();
     const cellIntersects = this.raycaster.intersectObjects(cellMeshes, false);
 
     const hitCells: Position3D[] = [];
+    let closestHighlighted: { pos: Position3D; distance: number } | null = null;
     for (const hit of cellIntersects) {
       const cellPos = hit.object.userData.cellPos as Position3D | undefined;
-      if (cellPos) hitCells.push(cellPos);
+      if (!cellPos) continue;
+      hitCells.push(cellPos);
+      if (this.highlightedKeys.has(posKey(cellPos)) && !closestHighlighted) {
+        closestHighlighted = { pos: cellPos, distance: hit.distance };
+      }
     }
 
-    // Raycast piece meshes so clicks land on the piece you can actually see,
-    // even when a closer cell (with a different piece) sits between the camera
-    // and the target.
-    let hitPiecePos: Position3D | null = null;
+    let closestPiece: { pos: Position3D; distance: number } | null = null;
     if (this.pieceView) {
       const groups = this.pieceView.getAllPieceGroups();
       const pieceHits = this.raycaster.intersectObjects(groups, true);
-      if (pieceHits.length > 0) {
-        let obj: THREE.Object3D | null = pieceHits[0].object;
+      for (const hit of pieceHits) {
+        let obj: THREE.Object3D | null = hit.object;
         while (obj && !(obj.userData as Record<string, unknown>)?.piece) {
           obj = obj.parent;
         }
         if (obj) {
-          hitPiecePos = (obj.userData.piece as Piece).position;
+          closestPiece = { pos: (obj.userData.piece as Piece).position, distance: hit.distance };
+          break;
         }
       }
     }
@@ -237,15 +244,16 @@ export class Interaction {
     // Clicking the selected piece should always return its position so the
     // game layer can deselect, even if highlighted cells on other layers are
     // in the ray's path.
-    if (hitPiecePos && this.selectedKey && posKey(hitPiecePos) === this.selectedKey) {
-      return hitPiecePos;
+    if (closestPiece && this.selectedKey && posKey(closestPiece.pos) === this.selectedKey) {
+      return closestPiece.pos;
     }
 
-    for (const pos of hitCells) {
-      if (this.highlightedKeys.has(posKey(pos))) return pos;
-    }
+    // Prioritize piece clicks over highlighted-cell clicks. In stacked 3D layers,
+    // users often target a visible piece while highlighted cells from a previously
+    // selected piece lie along the same ray path.
+    if (closestPiece) return closestPiece.pos;
 
-    if (hitPiecePos) return hitPiecePos;
+    if (closestHighlighted) return closestHighlighted.pos;
 
     if (this.board) {
       for (const pos of hitCells) {
@@ -260,9 +268,7 @@ export class Interaction {
   private raycastPiece(clientX: number, clientY: number): Piece | null {
     if (!this.pieceView) return null;
 
-    this.mouse.x = (clientX / window.innerWidth) * 2 - 1;
-    this.mouse.y = -(clientY / window.innerHeight) * 2 + 1;
-    this.raycaster.setFromCamera(this.mouse, this.renderer.camera);
+    this.setRayFromClient(clientX, clientY);
 
     const groups = this.pieceView.getAllPieceGroups();
     const hits = this.raycaster.intersectObjects(groups, true);

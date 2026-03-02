@@ -95,6 +95,20 @@ export class Game {
     if (this.isBotTurn()) return;
     if (this.isRemoteTurn()) return;
 
+    const clickedPiece = this.board.getPieceAt(pos);
+
+    // If the click lands on one of your own pieces, always treat it as a
+    // selection intent first. This prevents stale/misaligned target resolution
+    // from moving a previously selected piece when switching selection.
+    if (clickedPiece && clickedPiece.color === this.currentTurn) {
+      if (this._selectedPiece && posEqual(clickedPiece.position, this._selectedPiece.position)) {
+        this.deselect();
+      } else {
+        this.selectPiece(clickedPiece);
+      }
+      return;
+    }
+
     if (this._selectedPiece) {
       const isValidTarget = this._validMoves.some(m => posEqual(m, pos));
       if (isValidTarget) {
@@ -103,17 +117,7 @@ export class Game {
       }
     }
 
-    const piece = this.board.getPieceAt(pos);
-
-    if (piece && piece.color === this.currentTurn) {
-      if (this._selectedPiece && posEqual(piece.position, this._selectedPiece.position)) {
-        this.deselect();
-      } else {
-        this.selectPiece(piece);
-      }
-    } else {
-      this.deselect();
-    }
+    this.deselect();
   }
 
   /** Public entry point for the bot to make a move */
@@ -163,7 +167,6 @@ export class Game {
       !this.gameOver &&
       !this.awaitingPromotion &&
       !this.pendingPostMovePiece &&
-      !this.botThinking &&
       this.mode.type !== 'online'
     );
   }
@@ -171,7 +174,11 @@ export class Game {
   undo(): void {
     if (!this.canUndo()) return;
 
-    if (this.mode.type === 'bot' && this.history.length >= 2) {
+    const shouldUndoFullPlyPair = this.mode.type === 'bot'
+      && !this.botThinking
+      && this.currentTurn === PieceColor.White
+      && this.history.length >= 2;
+    if (shouldUndoFullPlyPair) {
       this.history.pop();
       const entry = this.history.pop()!;
       this.restoreSnapshot(entry);
