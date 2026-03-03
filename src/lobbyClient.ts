@@ -44,12 +44,15 @@ export class LobbyClient {
   }
 
   private defaultUrl(): string {
-    const loc = window.location;
-    const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
     
-    // In production on Vercel, /lobby-ws is proxy-rewritten to PartyKit.
-    // Locally, Vite's proxy (configured in vite.config.ts) routes /lobby-ws to PartyKit.
-    return `${proto}//${loc.host}/lobby-ws`;
+    // In production, you must set VITE_PARTYKIT_HOST in your Vercel Environment Variables!
+    // Format: "3dchess.YOUR_NEW_USERNAME.partykit.dev" (No https:// or wss://)
+    const host = import.meta.env.VITE_PARTYKIT_HOST || (isLocalhost ? '127.0.0.1:1999' : 'fallback-url-please-set-env-var.partykit.dev');
+    const proto = isLocalhost ? 'ws:' : 'wss:';
+    
+    // Connect directly to the PartyKit room
+    return `${proto}//${host}/parties/main/global-lobby`;
   }
 
   onMessage(handler: MessageHandler): void {

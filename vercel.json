@@ -1,8 +1,0 @@
-{
-  "rewrites": [
-    {
-      "source": "/lobby-ws",
-      "destination": "https://3dchess.liuzzi.partykit.dev/parties/main/global-lobby"
-    }
-  ]
-}

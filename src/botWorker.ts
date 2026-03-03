@@ -768,7 +768,7 @@ function negamax(
   const h = hashBoard(board, toMove);
 
   const tt = ttProbe(h.low, h.high, depth);
-  if (tt) {
+  if (tt && tt.depth >= depth) {
     if (tt.flag === TT_FLAG_EXACT) return tt.score;
     if (tt.flag === TT_FLAG_ALPHA) beta = Math.min(beta, tt.score);
     if (tt.flag === TT_FLAG_BETA) alpha = Math.max(alpha, tt.score);
