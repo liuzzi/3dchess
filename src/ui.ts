@@ -90,7 +90,6 @@ export class UI {
 
     this.setupPromoButtons();
     this.setupFrostingSlider();
-    this.setupOutlineBrightnessSlider();
     this.setupMyThreatsButton();
     this.setupShowProtectedButton();
     this.setupAiThinkingFxButton();
@@ -161,14 +160,6 @@ export class UI {
     if (!slider || !this.boardView) return;
     slider.addEventListener('input', () => {
       this.boardView!.setFrosting(Number(slider.value) / 100);
-    }, { signal: this.ac.signal });
-  }
-
-  private setupOutlineBrightnessSlider(): void {
-    const slider = document.getElementById('outline-brightness-slider') as HTMLInputElement;
-    if (!slider || !this.boardView) return;
-    slider.addEventListener('input', () => {
-      this.boardView!.setOutlineBrightness(Number(slider.value) / 100);
     }, { signal: this.ac.signal });
   }
 

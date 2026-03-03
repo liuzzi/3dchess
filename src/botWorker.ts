@@ -32,19 +32,19 @@ const EG_VALUE: Record<PieceType, number> = {
 
 const TIME_LIMIT: Record<Difficulty, number> = {
   easy: 800,
-  medium: 2000,
+  medium: 3200,
   hard: 7500,
 };
 
 const MAX_DEPTH: Record<Difficulty, number> = {
   easy: 2,
-  medium: 5,
+  medium: 6,
   hard: 9,
 };
 
 const NOISE_AMPLITUDE: Record<Difficulty, number> = {
   easy: 120,
-  medium: 20,
+  medium: 4,
   hard: 0,
 };
 
@@ -56,7 +56,7 @@ let nodeLimit = Infinity;
 
 const NODE_LIMIT: Record<Difficulty, number> = {
   easy: 160_000,
-  medium: 700_000,
+  medium: 1_400_000,
   hard: 1_800_000,
 };
 
@@ -154,6 +154,7 @@ const MAX_KILLER_PLY = 128;
 const killerData = new Int32Array(MAX_KILLER_PLY * 2).fill(NO_MOVE);
 
 let activeSetup: SetupMode = 'classic';
+let activeDifficulty: Difficulty = 'medium';
 
 function checkTime(): void {
   nodesSearched++;
@@ -164,6 +165,53 @@ function checkTime(): void {
 
 function getOpponent(color: PieceColor): PieceColor {
   return color === PieceColor.White ? PieceColor.Black : PieceColor.White;
+}
+
+function legalAttackInfo(
+  board: Board,
+  attackerColor: PieceColor,
+  target: Position3D,
+): { count: number; cheapestValue: number } {
+  let count = 0;
+  let cheapestValue = Infinity;
+  const pieces = Array.from(board.getPiecesOfColor(attackerColor));
+  for (const p of pieces) {
+    let attacksTarget = false;
+    forEachAttackedSquare(board, p, (x, y, z) => {
+      if (!attacksTarget && x === target.x && y === target.y && z === target.z) attacksTarget = true;
+    });
+    if (!attacksTarget) continue;
+
+    const applied = board.applyMove(p, target);
+    const legal = !isKingInCheck(board, attackerColor);
+    board.unapplyMove(applied);
+    if (!legal) continue;
+
+    count++;
+    const v = PIECE_VALUE[p.type];
+    if (v < cheapestValue) cheapestValue = v;
+  }
+  return { count, cheapestValue };
+}
+
+function immediateBlunderPenalty(board: Board, movedPiece: Piece): number {
+  if (movedPiece.type === PieceType.King) return 0;
+  const pieceValue = PIECE_VALUE[movedPiece.type];
+  const enemy = getOpponent(movedPiece.color);
+
+  const enemyInfo = legalAttackInfo(board, enemy, movedPiece.position);
+  if (enemyInfo.count === 0) return 0;
+  const ownInfo = legalAttackInfo(board, movedPiece.color, movedPiece.position);
+
+  let penalty = 0;
+  if (ownInfo.count === 0) penalty += pieceValue * 1.05;
+  else if (enemyInfo.count > ownInfo.count) penalty += pieceValue * 0.55;
+
+  // If the square can be hit by a much cheaper attacker, that trade is usually bad.
+  if (enemyInfo.cheapestValue <= pieceValue * 0.6) penalty += pieceValue * 0.35;
+  if (movedPiece.type === PieceType.Queen || movedPiece.type === PieceType.Rook) penalty *= 1.2;
+
+  return Math.min(pieceValue * 1.6, penalty);
 }
 
 // 64-bit Zobrist hashing via two 32-bit integers
@@ -416,7 +464,16 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
     const defendedByOwn = piece.color === botColor
       ? botAttacks[key]
       : oppAttacks[key];
-    const hangingPenalty = Math.min(220, PIECE_VALUE[piece.type] * 0.3 + attackedByOpp * 18);
+    // Penalize hanging/overloaded pieces at near-material scale to avoid
+    // "win a pawn, lose a rook/queen" blunders when search gets noisy/pruned.
+    const hangingPenalty = Math.min(
+      PIECE_VALUE[piece.type] * 1.05,
+      PIECE_VALUE[piece.type] * 0.72 + attackedByOpp * 36,
+    );
+    const overloadedPenalty = Math.min(
+      PIECE_VALUE[piece.type] * 0.22,
+      attackedByOpp * 16,
+    );
     if (defendedByOwn === 0) {
       if (piece.color === botColor) {
         mg -= hangingPenalty;
@@ -424,6 +481,14 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
       } else {
         mg += hangingPenalty;
         eg += hangingPenalty * 0.85;
+      }
+    } else if (attackedByOpp > defendedByOwn) {
+      if (piece.color === botColor) {
+        mg -= overloadedPenalty;
+        eg -= overloadedPenalty * 0.8;
+      } else {
+        mg += overloadedPenalty;
+        eg += overloadedPenalty * 0.8;
       }
     }
   }
@@ -441,7 +506,8 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
 
 function getAllMoves(board: Board, color: PieceColor): MoveCandidate[] {
   const legal: MoveCandidate[] = [];
-  for (const piece of board.getPiecesOfColor(color)) {
+  const pieces = Array.from(board.getPiecesOfColor(color));
+  for (const piece of pieces) {
     for (const to of getValidMoves(board, piece)) {
       const captured = board.getPieceAt(to);
       const applied = board.applyMove(piece, to);
@@ -589,7 +655,8 @@ function shouldSearchCapture(move: MoveCandidate): boolean {
 function findCheapestAttacker(board: Board, target: Position3D, attackerColor: PieceColor): Piece | null {
   let cheapest: Piece | null = null;
   let cheapestVal = Infinity;
-  for (const p of board.getPiecesOfColor(attackerColor)) {
+  const pieces = Array.from(board.getPiecesOfColor(attackerColor));
+  for (const p of pieces) {
     let attacksTarget = false;
     forEachAttackedSquare(board, p, (x, y, z) => {
       if (x === target.x && y === target.y && z === target.z) attacksTarget = true;
@@ -597,13 +664,8 @@ function findCheapestAttacker(board: Board, target: Position3D, attackerColor: P
     if (!attacksTarget) continue;
     const v = PIECE_VALUE[p.type];
     if (v < cheapestVal) {
-      const applied = board.applyMove(p, target);
-      const isLegal = !isKingInCheck(board, attackerColor);
-      board.unapplyMove(applied);
-      if (isLegal) {
-        cheapestVal = v;
-        cheapest = p;
-      }
+      cheapestVal = v;
+      cheapest = p;
     }
   }
   return cheapest;
@@ -646,7 +708,8 @@ function quiescenceMoves(board: Board, color: PieceColor, ply: number): MoveCand
   const moves: MoveCandidate[] = [];
   const includeCheckMoves = ply <= Q_CHECK_PLY_LIMIT;
 
-  for (const piece of board.getPiecesOfColor(color)) {
+  const pieces = Array.from(board.getPiecesOfColor(color));
+  for (const piece of pieces) {
     const pseudo = getValidMoves(board, piece);
     for (const to of pseudo) {
       const captured = board.getPieceAt(to);
@@ -951,10 +1014,12 @@ function searchAtDepth(
 
   for (const move of ordered) {
     let rawScore: number;
+    let safetyPenalty = 0;
     const applied = board.applyMove(move.piece, move.to);
     try {
       autoPromoteToQueen(move.piece);
       rawScore = -negamax(board, depth - 1, -rootBeta, -alpha, getOpponent(color), color, 1);
+      safetyPenalty = immediateBlunderPenalty(board, move.piece);
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (scored.length > 0) break;
@@ -964,9 +1029,11 @@ function searchAtDepth(
       board.unapplyMove(applied);
     }
 
-    scored.push({ fromPos: move.piece.position, to: move.to, score: rawScore, rawScore });
-    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: rawScore });
-    if (rawScore > alpha) alpha = rawScore;
+    const safetyScale = activeDifficulty === 'medium' ? 1.0 : activeDifficulty === 'easy' ? 0.7 : 0.4;
+    const adjustedScore = rawScore - safetyPenalty * safetyScale;
+    scored.push({ fromPos: move.piece.position, to: move.to, score: adjustedScore, rawScore });
+    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: adjustedScore });
+    if (adjustedScore > alpha) alpha = adjustedScore;
     if (alpha >= rootBeta) break;
   }
 
@@ -1039,7 +1106,7 @@ function computeAdaptiveTimeLimit(board: Board, color: PieceColor, difficulty: D
   if (totalPieces <= 14) factor += 0.2;
 
   const raw = Math.round(base * factor);
-  if (difficulty === 'medium') return Math.max(1800, Math.min(raw, 5000));
+  if (difficulty === 'medium') return Math.max(2600, Math.min(raw, 6200));
   return Math.max(3500, Math.min(raw, 12000));
 }
 
@@ -1113,6 +1180,7 @@ function iterativeSearch(
   progressMode: ProgressMode = 'depth',
   onProgress?: (kind: 'depth' | 'rootMove', result: DepthResult) => void,
 ): { best: ScoredMove; completedDepth: number; depthResults: DepthResult[] } {
+  activeDifficulty = difficulty;
   const maxDepth = MAX_DEPTH[difficulty];
   const budget = buildTimeBudget(board, color, difficulty);
   const restrictedRootMoves = resolveRootMoves(board, color, rootMoves);
@@ -1222,7 +1290,8 @@ function iterativeSearch(
         const unstable = depthResults.length >= 2
           ? Math.abs(depthResults[depthResults.length - 1].score - depthResults[depthResults.length - 2].score) > 140
           : false;
-        if (elapsed >= budget.softMs && !unstable && depth >= 4) break;
+        const minDepthBeforeSoftStop = difficulty === 'medium' ? 5 : 4;
+        if (elapsed >= budget.softMs && !unstable && depth >= minDepthBeforeSoftStop) break;
       }
     } catch (e) {
       if (e instanceof SearchAborted) {
@@ -1299,41 +1368,43 @@ function runSelfTest(pieces: Piece[], color: PieceColor, difficulty: Difficulty)
   return { pass: checks.every(c => c.endsWith('_ok') || c === 'best_move_legal'), checks };
 }
 
-self.onmessage = (e: MessageEvent<WorkerRequest>) => {
-  const { pieces, color, difficulty, setup, rootMoves, mode, progressMode } = e.data;
-  try {
-    activeSetup = setup ?? 'classic';
-    if (mode === 'selftest') {
-      const selfTest = runSelfTest(pieces, color, difficulty);
-      const resp: WorkerResponse = { type: 'result', selfTest };
-      self.postMessage(resp);
-      return;
-    }
-    const board = Board.deserialize(pieces);
-    const result = iterativeSearch(board, color, difficulty, rootMoves, progressMode ?? 'depth', (kind, depthResult) => {
-      const progress: WorkerResponse = {
-        type: 'progress',
-        progressKind: kind,
-        fromPos: depthResult.fromPos,
-        to: depthResult.to,
-        pvLine: depthResult.pvLine,
-        pvCandidates: depthResult.pvCandidates,
-        score: depthResult.score,
-        completedDepth: depthResult.depth,
+if (typeof self !== 'undefined') {
+  self.onmessage = (e: MessageEvent<WorkerRequest>) => {
+    const { pieces, color, difficulty, setup, rootMoves, mode, progressMode } = e.data;
+    try {
+      activeSetup = setup ?? 'classic';
+      if (mode === 'selftest') {
+        const selfTest = runSelfTest(pieces, color, difficulty);
+        const resp: WorkerResponse = { type: 'result', selfTest };
+        self.postMessage(resp);
+        return;
+      }
+      const board = Board.deserialize(pieces);
+      const result = iterativeSearch(board, color, difficulty, rootMoves, progressMode ?? 'depth', (kind, depthResult) => {
+        const progress: WorkerResponse = {
+          type: 'progress',
+          progressKind: kind,
+          fromPos: depthResult.fromPos,
+          to: depthResult.to,
+          pvLine: depthResult.pvLine,
+          pvCandidates: depthResult.pvCandidates,
+          score: depthResult.score,
+          completedDepth: depthResult.depth,
+        };
+        self.postMessage(progress);
+      });
+      const resp: WorkerResponse = {
+        type: 'result',
+        fromPos: result.best.fromPos,
+        to: result.best.to,
+        score: result.best.rawScore,
+        completedDepth: result.completedDepth,
+        depthResults: result.depthResults,
       };
-      self.postMessage(progress);
-    });
-    const resp: WorkerResponse = {
-      type: 'result',
-      fromPos: result.best.fromPos,
-      to: result.best.to,
-      score: result.best.rawScore,
-      completedDepth: result.completedDepth,
-      depthResults: result.depthResults,
-    };
-    self.postMessage(resp);
-  } catch (err) {
-    const resp: WorkerResponse = { type: 'error', error: String(err) };
-    self.postMessage(resp);
-  }
-};
+      self.postMessage(resp);
+    } catch (err) {
+      const resp: WorkerResponse = { type: 'error', error: String(err) };
+      self.postMessage(resp);
+    }
+  };
+}

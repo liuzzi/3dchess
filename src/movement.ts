@@ -304,7 +304,8 @@ export function isKingInCheck(board: Board, color: PieceColor): boolean {
   const kp = king.position;
   const enemy = color === PieceColor.White ? PieceColor.Black : PieceColor.White;
   
-  for (const p of board.getPiecesOfColor(enemy)) {
+  const pieces = Array.from(board.getPiecesOfColor(enemy));
+  for (const p of pieces) {
     switch (p.type) {
       case PieceType.Rook:
         if (slideAttacksKing(board, kp, p, ROOK_DIRS)) return true;
@@ -413,7 +414,8 @@ function hasAnyLegalMove(board: Board, piece: Piece): boolean {
 export function isCheckmate(board: Board, color: PieceColor, inCheck?: boolean): boolean {
   if (inCheck === undefined) inCheck = isKingInCheck(board, color);
   if (!inCheck) return false;
-  for (const p of board.getPiecesOfColor(color)) {
+  const pieces = Array.from(board.getPiecesOfColor(color));
+  for (const p of pieces) {
     if (hasAnyLegalMove(board, p)) return false;
   }
   return true;
@@ -422,7 +424,8 @@ export function isCheckmate(board: Board, color: PieceColor, inCheck?: boolean):
 export function isStalemate(board: Board, color: PieceColor, inCheck?: boolean): boolean {
   if (inCheck === undefined) inCheck = isKingInCheck(board, color);
   if (inCheck) return false;
-  for (const p of board.getPiecesOfColor(color)) {
+  const pieces = Array.from(board.getPiecesOfColor(color));
+  for (const p of pieces) {
     if (hasAnyLegalMove(board, p)) return false;
   }
   return true;

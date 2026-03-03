@@ -12,7 +12,8 @@ interface CellBase {
 export class BoardView {
   group: THREE.Group;
   cellMeshes: Map<number, THREE.Mesh> = new Map();
-  cellEdges: Map<number, THREE.LineSegments> = new Map();
+  cellEdges: Map<number, THREE.Points> = new Map();
+  cellLines: Map<number, THREE.LineSegments> = new Map();
   private cellMeshList: THREE.Mesh[] = [];
 
   private highlightedCells: Set<number> = new Set();
@@ -33,8 +34,7 @@ export class BoardView {
   private thinkingFlashTimers: Map<number, number> = new Map();
 
   private baseStyles: Map<number, CellBase> = new Map();
-  private frostingLevel: number = 0.035;
-  private outlineBrightness: number = 0.3;
+  private frostingLevel: number = 0.02;
 
   constructor() {
     this.group = new THREE.Group();
@@ -44,6 +44,19 @@ export class BoardView {
   private buildGrid(): void {
     const geo = new THREE.BoxGeometry(CELL_SIZE, CELL_SIZE, CELL_SIZE);
     const edgeGeo = new THREE.EdgesGeometry(geo);
+    const h = CELL_SIZE / 2;
+    const dotGeo = new THREE.BufferGeometry();
+    const corners = new Float32Array([
+      -h, -h, -h,
+       h, -h, -h,
+      -h,  h, -h,
+       h,  h, -h,
+      -h, -h,  h,
+       h, -h,  h,
+      -h,  h,  h,
+       h,  h,  h
+    ]);
+    dotGeo.setAttribute('position', new THREE.BufferAttribute(corners, 3));
     const lightBottom = new THREE.Color(0x6655bb);
     const lightTop = new THREE.Color(0x4466aa);
     const darkBottom = new THREE.Color(0x332255);
@@ -53,6 +66,16 @@ export class BoardView {
     const edgeDarkBottom = new THREE.Color(0x554477);
     const edgeDarkTop = new THREE.Color(0x445577);
     const tmp = new THREE.Color();
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 32;
+    const ctx = canvas.getContext('2d')!;
+    ctx.beginPath();
+    ctx.arc(16, 16, 16, 0, 2 * Math.PI);
+    ctx.fillStyle = 'white';
+    ctx.fill();
+    const dotTexture = new THREE.CanvasTexture(canvas);
 
     for (let z = 0; z < 8; z++) {
       const t = z / 7;
@@ -70,12 +93,12 @@ export class BoardView {
             ? tmp.copy(edgeLightBottom).lerp(edgeLightTop, t).getHex()
             : tmp.copy(edgeDarkBottom).lerp(edgeDarkTop, t).getHex();
 
-          this.baseStyles.set(key, { color: cellColor, opacity: 0.035, edgeColor });
+          this.baseStyles.set(key, { color: cellColor, opacity: this.frostingLevel, edgeColor });
 
           const mat = new THREE.MeshBasicMaterial({
             color: cellColor,
             transparent: true,
-            opacity: 0.035,
+            opacity: this.frostingLevel,
             depthWrite: false,
             side: THREE.DoubleSide,
           });
@@ -89,19 +112,36 @@ export class BoardView {
           this.cellMeshes.set(key, mesh);
           this.cellMeshList.push(mesh);
 
+          const dotMat = new THREE.PointsMaterial({
+            color: edgeColor,
+            size: 4,
+            transparent: true,
+            opacity: 0.15,
+            sizeAttenuation: false,
+            depthWrite: false,
+            map: dotTexture,
+            alphaTest: 0.05
+          });
+          const points = new THREE.Points(dotGeo, dotMat);
+          points.position.set(wx, wy, wz);
+          points.renderOrder = 1;
+          this.group.add(points);
+          this.cellEdges.set(key, points);
+
           const lineMat = new THREE.LineDashedMaterial({
             color: edgeColor,
             dashSize: 0.08,
             gapSize: 0.06,
             transparent: true,
-            opacity: this.outlineBrightness,
+            opacity: 0,
+            depthWrite: false
           });
           const line = new THREE.LineSegments(edgeGeo, lineMat);
           line.position.set(wx, wy, wz);
           line.computeLineDistances();
-          line.renderOrder = 1;
+          line.renderOrder = 2;
           this.group.add(line);
-          this.cellEdges.set(key, line);
+          this.cellLines.set(key, line);
         }
       }
     }
@@ -121,9 +161,12 @@ export class BoardView {
         (mesh.material as THREE.MeshBasicMaterial).opacity = isCapture ? 0.22 : 0.18;
       }
       const edge = this.cellEdges.get(key);
-      if (edge) {
-        (edge.material as THREE.LineDashedMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
-        (edge.material as THREE.LineDashedMaterial).opacity = 0.8;
+      const line = this.cellLines.get(key);
+      if (edge && line) {
+        (edge.material as THREE.PointsMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
+        (edge.material as THREE.PointsMaterial).opacity = 0.8;
+        (line.material as THREE.LineDashedMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
+        (line.material as THREE.LineDashedMaterial).opacity = 0.8;
       }
     }
   }
@@ -140,9 +183,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.25;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffee44);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.9;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffee44);
+      (edge.material as THREE.PointsMaterial).opacity = 0.9;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffee44);
+      (line.material as THREE.LineDashedMaterial).opacity = 0.9;
     }
   }
 
@@ -173,9 +219,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.3;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffffff);
-      (edge.material as THREE.LineDashedMaterial).opacity = 1.0;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffffff);
+      (edge.material as THREE.PointsMaterial).opacity = 1.0;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffffff);
+      (line.material as THREE.LineDashedMaterial).opacity = 1.0;
     }
   }
 
@@ -209,9 +258,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.34;
     }
     const edge = this.cellEdges.get(nextKey);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffffff);
-      (edge.material as THREE.LineDashedMaterial).opacity = 1.0;
+    const line = this.cellLines.get(nextKey);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffffff);
+      (edge.material as THREE.PointsMaterial).opacity = 1.0;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffffff);
+      (line.material as THREE.LineDashedMaterial).opacity = 1.0;
     }
   }
 
@@ -228,9 +280,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.34;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffffff);
-      (edge.material as THREE.LineDashedMaterial).opacity = 1.0;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffffff);
+      (edge.material as THREE.PointsMaterial).opacity = 1.0;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffffff);
+      (line.material as THREE.LineDashedMaterial).opacity = 1.0;
     }
 
     const timer = window.setTimeout(() => {
@@ -243,14 +298,17 @@ export class BoardView {
   private reapplyHighlight(key: number): void {
     const mesh = this.cellMeshes.get(key);
     const edge = this.cellEdges.get(key);
+    const line = this.cellLines.get(key);
     const isCapture = this.captureKeys.has(key);
     if (mesh) {
       (mesh.material as THREE.MeshBasicMaterial).color.set(isCapture ? 0xcc4422 : 0x22cc66);
       (mesh.material as THREE.MeshBasicMaterial).opacity = isCapture ? 0.22 : 0.18;
     }
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.8;
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
+      (edge.material as THREE.PointsMaterial).opacity = 0.8;
+      (line.material as THREE.LineDashedMaterial).color.set(isCapture ? 0xff6644 : 0x44ff88);
+      (line.material as THREE.LineDashedMaterial).opacity = 0.8;
     }
   }
 
@@ -283,9 +341,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.18;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xcc99ff);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.7;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xcc99ff);
+      (edge.material as THREE.PointsMaterial).opacity = 0.7;
+      (line.material as THREE.LineDashedMaterial).color.set(0xcc99ff);
+      (line.material as THREE.LineDashedMaterial).opacity = 0.7;
     }
   }
 
@@ -312,9 +373,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.16;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffaa55);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.65;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffaa55);
+      (edge.material as THREE.PointsMaterial).opacity = 0.65;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffaa55);
+      (line.material as THREE.LineDashedMaterial).opacity = 0.65;
     }
   }
 
@@ -342,8 +406,13 @@ export class BoardView {
 
     const edge = this.cellEdges.get(key);
     if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(base.edgeColor);
-      (edge.material as THREE.LineDashedMaterial).opacity = this.outlineBrightness;
+      (edge.material as THREE.PointsMaterial).color.set(base.edgeColor);
+      (edge.material as THREE.PointsMaterial).opacity = 0.15;
+    }
+
+    const line = this.cellLines.get(key);
+    if (line) {
+      (line.material as THREE.LineDashedMaterial).opacity = 0;
     }
   }
 
@@ -371,9 +440,12 @@ export class BoardView {
         (mesh.material as THREE.MeshBasicMaterial).opacity = 0.09;
       }
       const edge = this.cellEdges.get(key);
-      if (edge) {
-        (edge.material as THREE.LineDashedMaterial).color.set(0x99aabb);
-        (edge.material as THREE.LineDashedMaterial).opacity = 0.4;
+      const line = this.cellLines.get(key);
+      if (edge && line) {
+        (edge.material as THREE.PointsMaterial).color.set(0x99aabb);
+        (edge.material as THREE.PointsMaterial).opacity = 0.4;
+        (line.material as THREE.LineDashedMaterial).color.set(0x99aabb);
+        (line.material as THREE.LineDashedMaterial).opacity = 0.4;
       }
     }
 
@@ -386,9 +458,12 @@ export class BoardView {
         (mesh.material as THREE.MeshBasicMaterial).opacity = 0.2;
       }
       const edge = this.cellEdges.get(key);
-      if (edge) {
-        (edge.material as THREE.LineDashedMaterial).color.set(0xff5555);
-        (edge.material as THREE.LineDashedMaterial).opacity = 0.7;
+      const line = this.cellLines.get(key);
+      if (edge && line) {
+        (edge.material as THREE.PointsMaterial).color.set(0xff5555);
+        (edge.material as THREE.PointsMaterial).opacity = 0.7;
+        (line.material as THREE.LineDashedMaterial).color.set(0xff5555);
+        (line.material as THREE.LineDashedMaterial).opacity = 0.7;
       }
     }
   }
@@ -402,9 +477,12 @@ export class BoardView {
           (mesh.material as THREE.MeshBasicMaterial).opacity = 0.25;
         }
         const edge = this.cellEdges.get(key);
-        if (edge) {
-          (edge.material as THREE.LineDashedMaterial).color.set(0xffee44);
-          (edge.material as THREE.LineDashedMaterial).opacity = 0.9;
+        const line = this.cellLines.get(key);
+        if (edge && line) {
+          (edge.material as THREE.PointsMaterial).color.set(0xffee44);
+          (edge.material as THREE.PointsMaterial).opacity = 0.9;
+          (line.material as THREE.LineDashedMaterial).color.set(0xffee44);
+          (line.material as THREE.LineDashedMaterial).opacity = 0.9;
         }
       } else if (this.highlightedCells.has(key)) {
         this.reapplyHighlight(key);
@@ -428,14 +506,6 @@ export class BoardView {
       if (!base) continue;
       base.opacity = this.frostingLevel;
       (mesh.material as THREE.MeshBasicMaterial).opacity = this.frostingLevel;
-    }
-  }
-
-  setOutlineBrightness(level: number): void {
-    this.outlineBrightness = Math.max(0, Math.min(level, 1));
-    for (const [key, edge] of this.cellEdges) {
-      if (this.isCellInSpecialState(key)) continue;
-      (edge.material as THREE.LineDashedMaterial).opacity = this.outlineBrightness;
     }
   }
 
@@ -695,9 +765,12 @@ export class BoardView {
       (mesh.material as THREE.MeshBasicMaterial).opacity = 0.26;
     }
     const edge = this.cellEdges.get(key);
-    if (edge) {
-      (edge.material as THREE.LineDashedMaterial).color.set(0xffee88);
-      (edge.material as THREE.LineDashedMaterial).opacity = 0.95;
+    const line = this.cellLines.get(key);
+    if (edge && line) {
+      (edge.material as THREE.PointsMaterial).color.set(0xffee88);
+      (edge.material as THREE.PointsMaterial).opacity = 0.95;
+      (line.material as THREE.LineDashedMaterial).color.set(0xffee88);
+      (line.material as THREE.LineDashedMaterial).opacity = 0.95;
     }
 
     const timer = window.setTimeout(() => {

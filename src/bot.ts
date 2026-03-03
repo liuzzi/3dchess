@@ -92,7 +92,7 @@ export class Bot {
     onProgress?: (resp: WorkerResponse) => void,
     signal?: AbortSignal,
   ): Promise<WorkerResponse> {
-    const timeoutMs = this.difficulty === 'hard' ? 22000 : this.difficulty === 'medium' ? 12000 : 8000;
+    const timeoutMs = this.difficulty === 'hard' ? 22000 : this.difficulty === 'medium' ? 18000 : 8000;
     return this.requestWorker(this.workers[0], {
       pieces: board.serialize(),
       color: this.color,
@@ -105,7 +105,8 @@ export class Bot {
   private buildRootMoves(board: Board): RootMove[] {
     const all: Array<RootMove & { ordering: number }> = [];
     const openingPhase = board.pieces.length >= 28;
-    for (const piece of board.getPiecesOfColor(this.color)) {
+    const pieces = Array.from(board.getPiecesOfColor(this.color));
+    for (const piece of pieces) {
       for (const to of getLegalMoves(board, piece)) {
         const captured = board.getPieceAt(to);
         const captureValue = captured
@@ -242,11 +243,36 @@ export class Bot {
       }
     };
 
+    const opponent = this.color === PieceColor.White ? PieceColor.Black : PieceColor.White;
     let best: { piece: Piece; to: Position3D; score: number } | null = null;
-    for (const piece of board.getPiecesOfColor(this.color)) {
+    const pieces = Array.from(board.getPiecesOfColor(this.color));
+    for (const piece of pieces) {
       for (const to of getLegalMoves(board, piece)) {
         const captured = board.getPieceAt(to);
-        const score = captured ? (pieceValue(captured.type) * 10 - pieceValue(piece.type)) : 0;
+        const captureGain = captured ? (pieceValue(captured.type) - pieceValue(piece.type) * 0.12) : 0;
+
+        const applied = board.applyMove(piece, to);
+        let tacticalRisk = 0;
+        try {
+          // Score worst immediate legal enemy capture after this move.
+          const enemyPieces = Array.from(board.getPiecesOfColor(opponent));
+          for (const enemyPiece of enemyPieces) {
+            for (const enemyTo of getValidMoves(board, enemyPiece)) {
+              const enemyCaptured = board.getPieceAt(enemyTo);
+              if (!enemyCaptured || enemyCaptured.color !== this.color) continue;
+              const enemyApplied = board.applyMove(enemyPiece, enemyTo);
+              const enemyLegal = !isKingInCheck(board, opponent);
+              board.unapplyMove(enemyApplied);
+              if (!enemyLegal) continue;
+              const swing = pieceValue(enemyCaptured.type) - pieceValue(enemyPiece.type) * 0.1;
+              if (swing > tacticalRisk) tacticalRisk = swing;
+            }
+          }
+        } finally {
+          board.unapplyMove(applied);
+        }
+
+        const score = captureGain - tacticalRisk;
         if (!best || score > best.score) {
           best = { piece, to, score };
         }
