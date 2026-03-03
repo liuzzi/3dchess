@@ -15,8 +15,8 @@ import { wireOnlineEvents } from './onlineBridge';
 import { setupMenu, type MenuControllerHandle } from './menuController';
 import {
   computeHoverThreatPreview,
+  computeThreatLinesByAttacker,
   computeProtectionLinesForThreatenedPieces,
-  computeThreatLinesAfterMove,
 } from './threatPreview';
 import { autoPromoteToQueen } from './promotion';
 import { LobbyClient } from './lobbyClient';
@@ -39,6 +39,7 @@ let onlineFlowCancelled = false;
 let hoverPreviewTargetKey: string | null = null;
 let hoverPreviewRafPending = false;
 let queuedHoverPos: Position3D | null = null;
+let hoverPreviewTimerId: number | null = null;
 let myThreatsActive = true;
 let showProtectedActive = true;
 let aiThinkingFxEnabled = false;
@@ -50,6 +51,7 @@ let activeBotAbortController: AbortController | null = null;
 let lastAiFxBeepAt = 0;
 let aiThinkingDepthArrowHoldUntil = 0;
 let isCtrlPressed = false;
+let gameStatusEl: HTMLElement | null = null;
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Control' && !isCtrlPressed) {
@@ -273,26 +275,52 @@ function buildPvSetsForDisplay(progress: WorkerResponse): { fromPos: Position3D;
   return [buildPvForDisplay(basePv)];
 }
 
+const sharedShatterGeo = new THREE.BoxGeometry(1, 1, 1);
+const sharedShatterWhiteMat = new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.7, metalness: 0.2 });
+const sharedShatterBlackMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7, metalness: 0.2 });
+
+const sharedFlashGeo = new THREE.SphereGeometry(0.12, 12, 12);
+const sharedImpactGeo = new THREE.SphereGeometry(1, 8, 8);
+
+interface EffectUpdate {
+  // Return true when effect is finished.
+  update(now: number): boolean;
+}
+
+const activeEffects: EffectUpdate[] = [];
+
+function addEffect(effect: EffectUpdate): void {
+  activeEffects.push(effect);
+}
+
+function tickEffects(now: number): void {
+  for (let i = activeEffects.length - 1; i >= 0; i--) {
+    if (activeEffects[i].update(now)) {
+      activeEffects.splice(i, 1);
+    }
+  }
+}
+
+function clearEffects(): void {
+  activeEffects.length = 0;
+}
+
 function spawnShatterParticles(capturedPiece: Piece, pos: Position3D): void {
   if (!shatterParticlesGroup) return;
 
   const [x, y, z] = boardToWorld(pos);
   const center = new THREE.Vector3(x, y, z);
 
-  const color = capturedPiece.color === PieceColor.White ? 0xdddddd : 0x222222;
+  const isWhite = capturedPiece.color === PieceColor.White;
+  const mat = isWhite ? sharedShatterWhiteMat : sharedShatterBlackMat;
 
   const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; rotationAxis: THREE.Vector3; rotationSpeed: number }[] = [];
   const batchMeshes: THREE.Mesh[] = [];
 
   for (let i = 0; i < 30; i++) {
-    const mat = new THREE.MeshStandardMaterial({
-      color: color,
-      roughness: 0.7,
-      metalness: 0.2,
-    });
+    const mesh = new THREE.Mesh(sharedShatterGeo, mat);
     const size = 0.05 + Math.random() * 0.1;
-    const geo = new THREE.BoxGeometry(size, size, size);
-    const mesh = new THREE.Mesh(geo, mat);
+    mesh.scale.setScalar(size);
 
     mesh.position.set(
       center.x + (Math.random() - 0.5) * 0.5,
@@ -319,115 +347,106 @@ function spawnShatterParticles(capturedPiece: Piece, pos: Position3D): void {
   let lastTime = performance.now();
   const floorY = -1.5;
 
-  const animate = (now: number): void => {
-    const dt = Math.min((now - lastTime) / 1000, 0.1);
-    lastTime = now;
-    let allSettled = true;
+  addEffect({
+    update(now: number): boolean {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+      let allSettled = true;
 
-    for (const p of particles) {
-      if (p.mesh.position.y > floorY || Math.abs(p.velocity.y) > 0.1 || Math.abs(p.velocity.x) > 0.1 || Math.abs(p.velocity.z) > 0.1) {
-        allSettled = false;
-        p.velocity.y -= 15 * dt;
+      for (const p of particles) {
+        if (p.mesh.position.y > floorY || Math.abs(p.velocity.y) > 0.1 || Math.abs(p.velocity.x) > 0.1 || Math.abs(p.velocity.z) > 0.1) {
+          allSettled = false;
+          p.velocity.y -= 15 * dt;
 
-        p.mesh.position.addScaledVector(p.velocity, dt);
-        p.mesh.rotateOnAxis(p.rotationAxis, p.rotationSpeed * dt);
+          p.mesh.position.addScaledVector(p.velocity, dt);
+          p.mesh.rotateOnAxis(p.rotationAxis, p.rotationSpeed * dt);
 
-        if (p.mesh.position.y <= floorY) {
-          p.mesh.position.y = floorY;
-          if (Math.abs(p.velocity.y) > 0.5) {
-            p.velocity.y *= -0.4;
-            p.velocity.x *= 0.6;
-            p.velocity.z *= 0.6;
-            p.rotationSpeed *= 0.6;
-          } else {
-            p.velocity.y = 0;
-            p.velocity.x *= 0.9;
-            p.velocity.z *= 0.9;
-            p.rotationSpeed *= 0.9;
+          if (p.mesh.position.y <= floorY) {
+            p.mesh.position.y = floorY;
+            if (Math.abs(p.velocity.y) > 0.5) {
+              p.velocity.y *= -0.4;
+              p.velocity.x *= 0.6;
+              p.velocity.z *= 0.6;
+              p.rotationSpeed *= 0.6;
+            } else {
+              p.velocity.y = 0;
+              p.velocity.x *= 0.9;
+              p.velocity.z *= 0.9;
+              p.rotationSpeed *= 0.9;
+            }
           }
         }
       }
-    }
 
-    if (!allSettled) {
-      window.requestAnimationFrame(animate);
-    }
-  };
-
-  window.requestAnimationFrame(animate);
+      return allSettled;
+    },
+  });
 }
 
 function spawnImpactBurst(pos: Position3D): void {
   const [x, y, z] = boardToWorld(pos);
   const center = new THREE.Vector3(x, y, z);
   const group = new THREE.Group();
-  const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; material: THREE.MeshBasicMaterial }[] = [];
+  const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; material: THREE.MeshBasicMaterial; size: number }[] = [];
 
   const flashMat = new THREE.MeshBasicMaterial({
     color: 0xffb347,
     transparent: true,
     opacity: 0.9,
   });
-  const flashGeo = new THREE.SphereGeometry(0.12, 12, 12);
-  const flash = new THREE.Mesh(flashGeo, flashMat);
+  const flash = new THREE.Mesh(sharedFlashGeo, flashMat);
   flash.position.copy(center);
   group.add(flash);
 
+  const burstMat1 = new THREE.MeshBasicMaterial({ color: 0xff4d00, transparent: true, opacity: 0.95 });
+  const burstMat2 = new THREE.MeshBasicMaterial({ color: 0xffa000, transparent: true, opacity: 0.95 });
+
   for (let i = 0; i < 14; i++) {
-    const mat = new THREE.MeshBasicMaterial({
-      color: i % 3 === 0 ? 0xff4d00 : 0xffa000,
-      transparent: true,
-      opacity: 0.95,
-    });
-    const geo = new THREE.SphereGeometry(0.03 + Math.random() * 0.03, 8, 8);
-    const mesh = new THREE.Mesh(geo, mat);
+    const mat = i % 3 === 0 ? burstMat1 : burstMat2;
+    const mesh = new THREE.Mesh(sharedImpactGeo, mat);
+    const size = 0.03 + Math.random() * 0.03;
+    mesh.scale.setScalar(size);
     mesh.position.copy(center);
     const velocity = new THREE.Vector3(
       (Math.random() - 0.5) * 2,
       (Math.random() - 0.2) * 2.2,
       (Math.random() - 0.5) * 2,
     );
-    particles.push({ mesh, velocity, material: mat });
+    particles.push({ mesh, velocity, material: mat, size });
     group.add(mesh);
   }
 
   renderer.scene.add(group);
   const start = performance.now();
 
-  const animate = (now: number): void => {
-    const elapsed = now - start;
-    const t = Math.min(1, elapsed / IMPACT_BURST_MS);
-    const fade = 1 - t;
+  addEffect({
+    update(now: number): boolean {
+      const elapsed = now - start;
+      const t = Math.min(1, elapsed / IMPACT_BURST_MS);
+      const fade = 1 - t;
 
-    flash.scale.setScalar(1 + t * 1.8);
-    flashMat.opacity = 0.9 * fade;
+      flash.scale.setScalar(1 + t * 1.8);
+      flashMat.opacity = 0.9 * fade;
 
-    for (const p of particles) {
-      p.mesh.position.set(
-        center.x + p.velocity.x * t,
-        center.y + p.velocity.y * t - 0.5 * t * t,
-        center.z + p.velocity.z * t,
-      );
-      p.material.opacity = 0.95 * fade;
-      p.mesh.scale.setScalar(1 - t * 0.35);
-    }
+      for (const p of particles) {
+        p.mesh.position.set(
+          center.x + p.velocity.x * t,
+          center.y + p.velocity.y * t - 0.5 * t * t,
+          center.z + p.velocity.z * t,
+        );
+        p.material.opacity = 0.95 * fade;
+        p.mesh.scale.setScalar(p.size * (1 - t * 0.35));
+      }
 
-    if (t < 1) {
-      window.requestAnimationFrame(animate);
-      return;
-    }
+      if (t < 1) return false;
 
-    renderer.scene.remove(group);
-    flashGeo.dispose();
-    flashMat.dispose();
-    for (const p of particles) {
-      const geo = p.mesh.geometry as THREE.BufferGeometry;
-      geo.dispose();
-      p.material.dispose();
-    }
-  };
-
-  window.requestAnimationFrame(animate);
+      renderer.scene.remove(group);
+      flashMat.dispose();
+      burstMat1.dispose();
+      burstMat2.dispose();
+      return true;
+    },
+  });
 }
 
 async function animateMoveSteps(
@@ -488,70 +507,135 @@ async function animateMoveSteps(
   boardView.setTraversalCell(null);
 }
 
-function recalcThreatLines(): void {
-  boardView.clearThreatLines();
-  boardView.clearHoverProtectionLines();
-  if (!game || !game.lastMove) return;
-  const opposite = (color: PieceColor): PieceColor => (
-    color === PieceColor.White ? PieceColor.Black : PieceColor.White
-  );
-  const perspectiveColor = (() => {
-    if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
-    if (game.mode.type === 'bot') {
-      if (bot) return opposite(bot.color);
-      return PieceColor.White;
-    }
-    return game.currentTurn;
-  })();
-  const attackerColor = game.mode.type === 'local'
-    ? opposite(game.currentTurn)
-    : opposite(perspectiveColor);
-  const pairs = computeThreatLinesAfterMove(game.board, attackerColor);
-  if (pairs.length > 0) {
-    boardView.showThreatLines(pairs);
+function oppositeColor(color: PieceColor): PieceColor {
+  return color === PieceColor.White ? PieceColor.Black : PieceColor.White;
+}
+
+function resolvePerspectiveColor(): PieceColor {
+  if (!game) return PieceColor.White;
+  if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
+  if (game.mode.type === 'bot') {
+    if (bot) return oppositeColor(bot.color);
+    return PieceColor.White;
   }
-  if (!showProtectedActive || game.selectedPiece) return;
-  const protectionPairs = computeProtectionLinesForThreatenedPieces(game.board, attackerColor);
+  return game.currentTurn;
+}
+
+function recalcThreatVisuals(includeMyThreats = myThreatsActive): void {
+  boardView.clearThreatLines();
+  boardView.clearDangerPreviewLines();
+  boardView.clearHoverProtectionLines();
+  if (!game) return;
+
+  const perspectiveColor = resolvePerspectiveColor();
+  const attackerColor = game.mode.type === 'local'
+    ? oppositeColor(game.currentTurn)
+    : oppositeColor(perspectiveColor);
+
+  const threatsByAttacker = computeThreatLinesByAttacker(game.board);
+  const enemyThreatPairs = attackerColor === PieceColor.White
+    ? threatsByAttacker.white
+    : threatsByAttacker.black;
+
+  const myThreatPairs = perspectiveColor === PieceColor.White
+    ? threatsByAttacker.white
+    : threatsByAttacker.black;
+
+  if (game.lastMove && enemyThreatPairs.length > 0) {
+    boardView.showThreatLines(enemyThreatPairs);
+  }
+
+  if (includeMyThreats && myThreatPairs.length > 0) {
+    boardView.showDangerPreviewLines(myThreatPairs);
+  }
+
+  if (!game.lastMove || !showProtectedActive || game.selectedPiece) return;
+  const protectionPairs = computeProtectionLinesForThreatenedPieces(game.board, attackerColor, enemyThreatPairs);
   if (protectionPairs.length > 0) {
     boardView.showHoverProtectionLines(protectionPairs);
   }
 }
 
+function recalcThreatLines(): void {
+  if (!game?.lastMove) {
+    boardView.clearThreatLines();
+    boardView.clearHoverProtectionLines();
+    return;
+  }
+  recalcThreatVisuals(false);
+}
+
 function recalcMyThreats(): void {
-  boardView.clearDangerPreviewLines();
-  if (!game || !myThreatsActive) return;
-  const opposite = (color: PieceColor): PieceColor => (
-    color === PieceColor.White ? PieceColor.Black : PieceColor.White
-  );
-  const myColor = (() => {
-    if (game.mode.type === 'online') return game.mode.localColor ?? game.currentTurn;
-    if (game.mode.type === 'bot') {
-      if (bot) return opposite(bot.color);
-      return PieceColor.White;
-    }
-    return game.currentTurn;
-  })();
-  const pairs = computeThreatLinesAfterMove(game.board, myColor);
-  if (pairs.length > 0) {
-    boardView.showDangerPreviewLines(pairs);
+  const hasGame = Boolean(game);
+  if (!hasGame || !myThreatsActive) {
+    boardView.clearDangerPreviewLines();
+    return;
+  }
+  const hasLastMove = Boolean(game.lastMove);
+  if (hasLastMove) {
+    recalcThreatVisuals(myThreatsActive);
+    return;
+  }
+  const perspectiveColor = resolvePerspectiveColor();
+  const threatsByAttacker = computeThreatLinesByAttacker(game.board);
+  const myThreatPairs = perspectiveColor === PieceColor.White
+    ? threatsByAttacker.white
+    : threatsByAttacker.black;
+  if (myThreatPairs.length > 0) {
+    boardView.showDangerPreviewLines(myThreatPairs);
+  } else {
+    boardView.clearDangerPreviewLines();
   }
 }
 
 function queueHoverPreview(pos: Position3D | null): void {
   queuedHoverPos = pos;
-  if (hoverPreviewRafPending) return;
-  hoverPreviewRafPending = true;
+  if (!game.selectedPiece) {
+    if (hoverPreviewTimerId !== null) {
+      window.clearTimeout(hoverPreviewTimerId);
+      hoverPreviewTimerId = null;
+    }
+    if (hoverPreviewTargetKey !== null) {
+      hoverPreviewTargetKey = null;
+      boardView.clearHoverThreatLines();
+      recalcThreatVisuals();
+    }
+    return;
+  }
 
-  window.requestAnimationFrame(() => {
-    hoverPreviewRafPending = false;
+  if (!pos) {
+    if (hoverPreviewTimerId !== null) {
+      window.clearTimeout(hoverPreviewTimerId);
+      hoverPreviewTimerId = null;
+    }
+    if (hoverPreviewTargetKey === null) return;
+    if (hoverPreviewRafPending) return;
+    hoverPreviewRafPending = true;
+    window.requestAnimationFrame(() => {
+      hoverPreviewRafPending = false;
+      const nextPos = queuedHoverPos;
+      queuedHoverPos = null;
+      if (!nextPos || !game.selectedPiece) {
+        hoverPreviewTargetKey = null;
+        boardView.clearHoverThreatLines();
+        recalcThreatVisuals();
+      }
+    });
+    return;
+  }
+
+  if (hoverPreviewTimerId !== null) {
+    window.clearTimeout(hoverPreviewTimerId);
+  }
+  hoverPreviewTimerId = window.setTimeout(() => {
+    hoverPreviewTimerId = null;
     const nextPos = queuedHoverPos;
     queuedHoverPos = null;
 
     if (!nextPos || !game.selectedPiece) {
       hoverPreviewTargetKey = null;
       boardView.clearHoverThreatLines();
-      recalcThreatLines();
-      recalcMyThreats();
+      recalcThreatVisuals();
       return;
     }
 
@@ -570,7 +654,7 @@ function queueHoverPreview(pos: Position3D | null): void {
     } else {
       boardView.clearHoverProtectionLines();
     }
-  });
+  }, 55);
 }
 
 let shatterParticlesGroup: THREE.Group | null = null;
@@ -582,6 +666,7 @@ function disposeCurrentGame(): void {
   if (interaction) interaction.dispose();
   if (ui) ui.dispose();
   if (game) game.removeAllListeners();
+  clearEffects();
   clearAllShatterParticles();
   shatterParticlesGroup = null;
 }
@@ -589,8 +674,7 @@ function disposeCurrentGame(): void {
 function disposeMeshes(meshes: THREE.Mesh[]): void {
   for (const mesh of meshes) {
     shatterParticlesGroup?.remove(mesh);
-    mesh.geometry.dispose();
-    if (mesh.material instanceof THREE.Material) mesh.material.dispose();
+    // Geometries and materials are shared, so do not dispose them here.
   }
 }
 
@@ -638,7 +722,7 @@ function initGame(mode: GameMode): void {
       if (!enabled) {
         boardView.clearHoverProtectionLines();
       } else if (!game.selectedPiece) {
-        recalcThreatLines();
+        recalcThreatVisuals();
       }
     },
     onAiThinkingFxToggle: (enabled: boolean) => {
@@ -711,8 +795,7 @@ function initGame(mode: GameMode): void {
         interaction.setHighlightedCells(new Set());
         interaction.setSelectedKey(null);
         pieceView.setSelected(null);
-        recalcThreatLines();
-        recalcMyThreats();
+        recalcThreatVisuals();
         break;
       case 'move': {
         stopAiThinkingFx();
@@ -722,8 +805,7 @@ function initGame(mode: GameMode): void {
         boardView.clearCheckPath();
         boardView.clearHoverThreatLines();
         boardView.highlightLastMove(from, to);
-        recalcThreatLines();
-        recalcMyThreats();
+        recalcThreatVisuals();
         moveAnimationQueue = moveAnimationQueue.then(async () => {
           if (token !== moveAnimationToken) return;
           isAnimatingMove = true;
@@ -764,6 +846,7 @@ function initGame(mode: GameMode): void {
         hoverPreviewTargetKey = null;
         moveAnimationToken++;
         isAnimatingMove = false;
+        clearEffects();
         pieceView.sync(game.board);
         pieceView.setSelected(null);
         boardView.clearHighlights();
@@ -782,6 +865,7 @@ function initGame(mode: GameMode): void {
         hoverPreviewTargetKey = null;
         moveAnimationToken++;
         isAnimatingMove = false;
+        clearEffects();
         const { lastMove } = event.data;
         pieceView.sync(game.board);
         pieceView.setSelected(null);
@@ -797,8 +881,7 @@ function initGame(mode: GameMode): void {
         if (lastMove) {
           boardView.highlightLastMove(lastMove.from, lastMove.to);
         }
-        recalcThreatLines();
-        recalcMyThreats();
+        recalcThreatVisuals();
         break;
       }
       case 'botTurn':
@@ -807,7 +890,9 @@ function initGame(mode: GameMode): void {
     }
   });
 
-  renderer.startLoop(() => {});
+  renderer.startLoop(() => {
+    tickEffects(performance.now());
+  });
 }
 
 async function handleBotTurn(): Promise<void> {
@@ -817,7 +902,9 @@ async function handleBotTurn(): Promise<void> {
   activeBotAbortController = abortController;
   startAiThinkingFx(turnToken);
 
-  const statusEl = document.getElementById('game-status')!;
+  if (!gameStatusEl) gameStatusEl = document.getElementById('game-status');
+  const statusEl = gameStatusEl;
+  if (!statusEl) return;
   statusEl.textContent = 'Thinking...';
   const thinkStart = performance.now();
   const fxDiag = AI_FX_DEV_DIAGNOSTICS && aiThinkingFxEnabled

@@ -445,7 +445,6 @@ export class BoardView {
       const origin = new THREE.Vector3(...boardToWorld(from));
       const dest = new THREE.Vector3(...boardToWorld(to));
       const arrow = this.createArrow(origin, dest, 0xff2222, 0.7);
-      this.group.add(arrow);
       this.threatArrows.push(arrow);
     }
   }
@@ -456,7 +455,6 @@ export class BoardView {
       const origin = new THREE.Vector3(...boardToWorld(from));
       const dest = new THREE.Vector3(...boardToWorld(to));
       const arrow = this.createArrow(origin, dest, 0xff8800, 0.6);
-      this.group.add(arrow);
       this.dangerPreviewArrows.push(arrow);
     }
   }
@@ -467,7 +465,6 @@ export class BoardView {
       const origin = new THREE.Vector3(...boardToWorld(from));
       const dest = new THREE.Vector3(...boardToWorld(to));
       const arrow = this.createArrow(origin, dest, 0xff8800, 0.6);
-      this.group.add(arrow);
       this.hoverThreatArrows.push(arrow);
     }
   }
@@ -478,7 +475,6 @@ export class BoardView {
       const origin = new THREE.Vector3(...boardToWorld(from));
       const dest = new THREE.Vector3(...boardToWorld(to));
       const arrow = this.createArrow(origin, dest, 0x3da7ff, 0.86);
-      this.group.add(arrow);
       this.hoverProtectionArrows.push(arrow);
     }
   }
@@ -518,7 +514,6 @@ export class BoardView {
         const branchPenalty = branchIdx === 0 ? 0 : 0.16 + branchDim * 0.1;
         const opacity = Math.max(0.24, baseOpacity - branchPenalty);
         const arrow = this.createArrow(origin, dest, color, opacity);
-        this.group.add(arrow);
         this.thinkingArrows.push(arrow);
       }
     }
@@ -540,37 +535,59 @@ export class BoardView {
       const laneOffset = (ghost.lane ?? 0) * 0.04;
       mesh.position.set(x, y + 0.18 + laneOffset, z);
       mesh.renderOrder = 12;
-      this.group.add(mesh);
       this.thinkingGhosts.push(mesh);
     }
   }
 
   private clearThinkingGhosts(): void {
     for (const ghost of this.thinkingGhosts) {
-      ghost.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          if (Array.isArray(child.material)) {
-            child.material.forEach((m) => m.dispose());
-          } else {
-            child.material.dispose();
-          }
-        }
-      });
-      this.group.remove(ghost);
+      ghost.visible = false;
+      const key = ghost.userData.poolKey;
+      if (key) {
+        if (!this.ghostPool.has(key)) this.ghostPool.set(key, []);
+        this.ghostPool.get(key)!.push(ghost);
+      }
     }
     this.thinkingGhosts = [];
   }
 
   private createThinkingGhostPiece(type: PieceType, color: PieceColor, plyT: number): THREE.Group {
-    const group = new THREE.Group();
+    const key = `${type}-${color}`;
+    let pool = this.ghostPool.get(key);
+    if (!pool) {
+      pool = [];
+      this.ghostPool.set(key, pool);
+    }
+
+    let group: THREE.Group;
+    if (pool.length > 0) {
+      group = pool.pop()!;
+      group.visible = true;
+    } else {
+      group = this.createThinkingGhostPieceBase(type, color);
+      this.group.add(group);
+    }
+
     const bodyHex = color === PieceColor.White ? 0xf0e6d2 : 0x2a2a3e;
     const tint = new THREE.Color(0xffdd33).lerp(new THREE.Color(0x33e6ff), plyT);
     const baseColor = new THREE.Color(bodyHex).lerp(tint, 0.3);
+
+    group.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.userData.isBody) {
+        (child.material as THREE.MeshStandardMaterial).color.copy(baseColor);
+      }
+    });
+
+    return group;
+  }
+
+  private createThinkingGhostPieceBase(type: PieceType, color: PieceColor): THREE.Group {
+    const group = new THREE.Group();
+    group.userData.poolKey = `${type}-${color}`;
     const outlineColor = color === PieceColor.White ? 0xffffff : 0x111111;
 
     const makeBodyMat = () => new THREE.MeshStandardMaterial({
-      color: baseColor.getHex(),
+      color: 0xffffff,
       metalness: 0.28,
       roughness: 0.62,
       transparent: true,
@@ -590,6 +607,7 @@ export class BoardView {
       configure?: (mesh: THREE.Mesh) => void,
     ): void => {
       const mainPart = new THREE.Mesh(geo, makeBodyMat());
+      mainPart.userData.isBody = true;
       configure?.(mainPart);
       group.add(mainPart);
 
@@ -699,44 +717,77 @@ export class BoardView {
     this.threatArrows = [];
   }
 
-  private createArrow(from: THREE.Vector3, to: THREE.Vector3, color: number, opacity: number): THREE.Group {
-    const arrow = new THREE.Group();
-    const dir = new THREE.Vector3().subVectors(to, from);
-    const length = dir.length();
-    if (length === 0) return arrow;
+  private arrowPool: THREE.Group[] = [];
+  private ghostPool: Map<string, THREE.Group[]> = new Map();
+  private readonly arrowDir = new THREE.Vector3();
+  private readonly arrowNorm = new THREE.Vector3();
+  private readonly arrowShaftEnd = new THREE.Vector3();
+  private readonly arrowUp = new THREE.Vector3(0, 1, 0);
 
-    const norm = dir.clone().normalize();
+  private createArrow(from: THREE.Vector3, to: THREE.Vector3, color: number, opacity: number): THREE.Group {
+    let arrow: THREE.Group;
+    let line: THREE.Line;
+    let cone: THREE.Mesh;
+
+    if (this.arrowPool.length > 0) {
+      arrow = this.arrowPool.pop()!;
+      arrow.visible = true;
+      line = arrow.children[0] as THREE.Line;
+      cone = arrow.children[1] as THREE.Mesh;
+    } else {
+      arrow = new THREE.Group();
+      const lineGeo = new THREE.BufferGeometry();
+      const lineMat = new THREE.LineBasicMaterial({ depthTest: true });
+      line = new THREE.Line(lineGeo, lineMat);
+      arrow.add(line);
+
+      const coneGeo = new THREE.ConeGeometry(1, 1, 8); // normalized cone
+      const coneMat = new THREE.MeshBasicMaterial({ depthTest: true });
+      cone = new THREE.Mesh(coneGeo, coneMat);
+      arrow.add(cone);
+
+      arrow.renderOrder = 10;
+      this.group.add(arrow);
+    }
+
+    this.arrowDir.subVectors(to, from);
+    const length = this.arrowDir.length();
+    if (length === 0) {
+      arrow.visible = false;
+      this.arrowPool.push(arrow);
+      return arrow;
+    }
+
+    this.arrowNorm.copy(this.arrowDir).normalize();
     const headLength = Math.min(0.3, length * 0.3);
     const headRadius = headLength * 0.45;
 
-    const shaftEnd = new THREE.Vector3().copy(to).addScaledVector(norm, -headLength);
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([from, shaftEnd]);
-    const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: true });
-    const line = new THREE.Line(lineGeo, lineMat);
-    arrow.add(line);
+    this.arrowShaftEnd.copy(to).addScaledVector(this.arrowNorm, -headLength);
+    line.geometry.setFromPoints([from, this.arrowShaftEnd]);
+    (line.material as THREE.LineBasicMaterial).color.setHex(color);
+    (line.material as THREE.LineBasicMaterial).opacity = opacity;
+    (line.material as THREE.LineBasicMaterial).transparent = opacity < 1;
 
-    const coneGeo = new THREE.ConeGeometry(headRadius, headLength, 8);
-    const coneMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthTest: true });
-    const cone = new THREE.Mesh(coneGeo, coneMat);
-    cone.position.copy(to).addScaledVector(norm, -headLength / 2);
-    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), norm);
-    arrow.add(cone);
+    cone.scale.set(headRadius, headLength, headRadius);
+    cone.position.copy(to).addScaledVector(this.arrowNorm, -headLength / 2);
+    cone.quaternion.setFromUnitVectors(this.arrowUp, this.arrowNorm);
+    (cone.material as THREE.MeshBasicMaterial).color.setHex(color);
+    (cone.material as THREE.MeshBasicMaterial).opacity = opacity;
+    (cone.material as THREE.MeshBasicMaterial).transparent = opacity < 1;
 
-    arrow.renderOrder = 10;
     return arrow;
   }
 
   private disposeArrow(arrow: THREE.Group): void {
-    arrow.traverse((child) => {
-      if (child instanceof THREE.Line || child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        if (child.material instanceof THREE.Material) child.material.dispose();
-      }
-    });
-    this.group.remove(arrow);
+    arrow.visible = false;
+    this.arrowPool.push(arrow);
   }
 
   getAllCellMeshes(): THREE.Mesh[] {
     return this.cellMeshList;
+  }
+
+  getCellMeshByKey(key: number): THREE.Mesh | undefined {
+    return this.cellMeshes.get(key);
   }
 }

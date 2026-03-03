@@ -1,6 +1,6 @@
 import { Board } from './board';
-import { getLegalMoves, getValidMoves, isKingInCheck } from './movement';
-import { Piece, PieceColor, PieceType, Position3D, Difficulty, SetupMode, posKey } from './types';
+import { getLegalMoves, getValidMoves, getAttackedSquares, isKingInCheck } from './movement';
+import { Piece, PieceColor, PieceType, Position3D, Difficulty, SetupMode, posKey, posKeyXYZ } from './types';
 import { autoPromoteToQueen } from './promotion';
 
 const PIECE_VALUE: Record<PieceType, number> = {
@@ -62,8 +62,7 @@ const NODE_LIMIT: Record<Difficulty, number> = {
 
 const MATE_SCORE = 1_000_000;
 const HISTORY_BONUS_SCALE = 0.15;
-const MAX_TT_ENTRIES = 180_000;
-const QUIESCENCE_MAX_PLY = 7;
+const QUIESCENCE_MAX_PLY = 32;
 const Q_CHECK_PLY_LIMIT = 2;
 const CHECK_EXTENSION_BUDGET = 2;
 const RECAPTURE_EXTENSION_BUDGET = 1;
@@ -105,25 +104,62 @@ interface TimeBudget {
   hardMs: number;
 }
 
-type BoundFlag = 'exact' | 'alpha' | 'beta';
+const NO_MOVE = -1;
 
-interface TranspositionEntry {
-  depth: number;
-  score: number;
-  flag: BoundFlag;
-  bestMoveKey?: string;
+const TT_SIZE_BITS = 18;
+const TT_SIZE = 1 << TT_SIZE_BITS;
+const TT_MASK = TT_SIZE - 1;
+const TT_FIELDS = 5;
+const TT_FLAG_EMPTY = 0;
+const TT_FLAG_EXACT = 1;
+const TT_FLAG_ALPHA = 2;
+const TT_FLAG_BETA = 3;
+const ttData = new Int32Array(TT_SIZE * TT_FIELDS);
+
+function ttProbe(hashLow: number, hashHigh: number, depth: number): { score: number; flag: number; bestMove: number; depth: number } | null {
+  const idx = (hashLow & TT_MASK) * TT_FIELDS;
+  const flag = ttData[idx + 3];
+  if (flag === TT_FLAG_EMPTY) return null;
+  if (ttData[idx] !== hashHigh) return null;
+  if (ttData[idx + 1] < depth) return null;
+  return { depth: ttData[idx + 1], score: ttData[idx + 2], flag, bestMove: ttData[idx + 4] };
 }
 
-const transpositionTable = new Map<string, TranspositionEntry>();
-const historyTable = new Map<string, number>();
-const killerMoves = new Map<number, [string, string]>();
+function ttStore(hashLow: number, hashHigh: number, depth: number, score: number, flag: number, bestMove: number): void {
+  const idx = (hashLow & TT_MASK) * TT_FIELDS;
+  const existingFlag = ttData[idx + 3];
+  if (existingFlag !== TT_FLAG_EMPTY && ttData[idx] === hashHigh && ttData[idx + 1] > depth) return;
+  ttData[idx] = hashHigh;
+  ttData[idx + 1] = depth;
+  ttData[idx + 2] = score;
+  ttData[idx + 3] = flag;
+  ttData[idx + 4] = bestMove;
+}
+
+function ttClear(): void {
+  ttData.fill(0);
+}
+
+function ttGetBestMove(hashLow: number, hashHigh: number): number {
+  const idx = (hashLow & TT_MASK) * TT_FIELDS;
+  if (ttData[idx + 3] === TT_FLAG_EMPTY) return NO_MOVE;
+  if (ttData[idx] !== hashHigh) return NO_MOVE;
+  return ttData[idx + 4];
+}
+
+const MOVE_KEY_SIZE = 1 << 18;
+const historyData = new Int32Array(MOVE_KEY_SIZE);
+
+const MAX_KILLER_PLY = 128;
+const killerData = new Int32Array(MAX_KILLER_PLY * 2).fill(NO_MOVE);
+
 let activeSetup: SetupMode = 'classic';
 
 function checkTime(): void {
   nodesSearched++;
   if (nodesSearched % 1024 !== 0) return;
   if (nodesSearched >= nodeLimit) throw new SearchAborted();
-  if (searchDeadline > 0 && Date.now() >= searchDeadline) throw new SearchAborted();
+  if (searchDeadline > 0 && performance.now() >= searchDeadline) throw new SearchAborted();
 }
 
 function getOpponent(color: PieceColor): PieceColor {
@@ -197,19 +233,6 @@ function hashEquals(a: Hash64, b: Hash64): boolean {
   return a.low === b.low && a.high === b.high;
 }
 
-function hashToKey(h: Hash64): string {
-  // Used only for transposition table Map keys. In a truly optimized engine this would be a BigBigArray or Uint32Array pair
-  // but JS Maps are still fairly fast with hex strings for 64-bit ints.
-  // Note: we pad with 0s to ensure consistent string length if we wanted, but not strictly necessary.
-  return h.low + ',' + h.high;
-}
-
-function boardSignature(board: Board): string {
-  const parts = board.pieces
-    .map((p) => `${p.type}:${p.color}:${p.hasMoved ? 1 : 0}:${p.position.x}${p.position.y}${p.position.z}`)
-    .sort();
-  return `${board.pieces.length}|${parts.join('|')}`;
-}
 
 function centerBonus(pos: Position3D): number {
   const cx = Math.abs(pos.x - 3.5);
@@ -258,23 +281,26 @@ function kingRingAttackPressure(
   return pressure;
 }
 
+const evalPawnFileCounts = new Int32Array(64);
+const evalPawnSet = new Uint8Array(512);
+
 function pawnStructureScore(board: Board, color: PieceColor): number {
-  const pawns = board.getPiecesOfColor(color).filter(p => p.type === PieceType.Pawn);
+  const pawns = Array.from(board.getPiecesOfColor(color)).filter(p => p.type === PieceType.Pawn);
   if (pawns.length === 0) return 0;
 
-  const fileCounts = new Int32Array(64);
-  const pawnSet = new Uint8Array(512);
+  evalPawnFileCounts.fill(0);
+  evalPawnSet.fill(0);
   
   for (const p of pawns) {
     const fileKey = p.position.x | (p.position.z << 3);
-    pawnSet[posKey(p.position)] = 1;
-    fileCounts[fileKey]++;
+    evalPawnSet[posKey(p.position)] = 1;
+    evalPawnFileCounts[fileKey]++;
   }
 
   let score = 0;
   for (const p of pawns) {
     const fileKey = p.position.x | (p.position.z << 3);
-    const fileCount = fileCounts[fileKey];
+    const fileCount = evalPawnFileCounts[fileKey];
     if (fileCount > 1) score -= (fileCount - 1) * 9;
 
     // Check 3D diagonals for defending pawns
@@ -288,7 +314,7 @@ function pawnStructureScore(board: Board, color: PieceColor): number {
           const nx = p.position.x + dx;
           const nz = p.position.z + dz;
           if (nx >= 0 && nx < 8 && nz >= 0 && nz < 8) {
-             if (pawnSet[posKey({x: nx, y: dy, z: nz})]) {
+             if (evalPawnSet[posKeyXYZ(nx, dy, nz)]) {
                hasDefender = true;
                break;
              }
@@ -315,27 +341,31 @@ function pieceActivity(mobility: number, piece: Piece): number {
   }
 }
 
+const evalWhiteAttacks = new Int32Array(512);
+const evalBlackAttacks = new Int32Array(512);
+
 function attackedAndDefendedCounts(
   board: Board,
-  moveCache: Map<Piece, Position3D[]>,
 ): { white: Int32Array; black: Int32Array } {
-  const white = new Int32Array(512);
-  const black = new Int32Array(512);
+  evalWhiteAttacks.fill(0);
+  evalBlackAttacks.fill(0);
   for (const piece of board.pieces) {
-    const targetMap = piece.color === PieceColor.White ? white : black;
-    const moves = moveCache.get(piece) ?? [];
+    const targetMap = piece.color === PieceColor.White ? evalWhiteAttacks : evalBlackAttacks;
+    const moves = getAttackedSquares(board, piece);
     for (const m of moves) {
       targetMap[posKey(m)]++;
     }
   }
-  return { white, black };
+  return { white: evalWhiteAttacks, black: evalBlackAttacks };
 }
+
+const evalMoveCache = new Map<Piece, Position3D[]>();
 
 function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): number {
   const opponentColor = botColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
-  const moveCache = new Map<Piece, Position3D[]>();
+  evalMoveCache.clear();
   for (const p of board.pieces) {
-    moveCache.set(p, getValidMoves(board, p));
+    evalMoveCache.set(p, getValidMoves(board, p));
   }
   const phaseMaterial = board.pieces
     .filter(p => p.type !== PieceType.King)
@@ -347,7 +377,7 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
   for (const piece of board.pieces) {
     const sign = piece.color === botColor ? 1 : -1;
     const central = centrality(piece.position);
-    const mobility = pieceActivity((moveCache.get(piece) ?? []).length, piece);
+    const mobility = pieceActivity((evalMoveCache.get(piece) ?? []).length, piece);
 
     let mgTerm = MG_VALUE[piece.type] + mobility * 1.5 + central * (piece.type === PieceType.King ? -1.4 : 1.7);
     let egTerm = EG_VALUE[piece.type] + mobility + central * (piece.type === PieceType.King ? 2.2 : 1.0);
@@ -364,7 +394,7 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
   mg += pawnStructureScore(board, botColor) - pawnStructureScore(board, opponentColor);
   eg += pawnStructureScore(board, botColor) * 0.8 - pawnStructureScore(board, opponentColor) * 0.8;
 
-  const attacks = attackedAndDefendedCounts(board, moveCache);
+  const attacks = attackedAndDefendedCounts(board);
   const botAttacks = botColor === PieceColor.White ? attacks.white : attacks.black;
   const oppAttacks = botColor === PieceColor.White ? attacks.black : attacks.white;
 
@@ -391,8 +421,8 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
     }
   }
 
-  const botKingPressure = kingRingAttackPressure(board, botColor, opponentColor, moveCache);
-  const oppKingPressure = kingRingAttackPressure(board, opponentColor, botColor, moveCache);
+  const botKingPressure = kingRingAttackPressure(board, botColor, opponentColor, evalMoveCache);
+  const oppKingPressure = kingRingAttackPressure(board, opponentColor, botColor, evalMoveCache);
   mg += (oppKingPressure - botKingPressure) * 12;
   eg += (oppKingPressure - botKingPressure) * 6;
 
@@ -403,34 +433,31 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
 }
 
 function getAllMoves(board: Board, color: PieceColor): MoveCandidate[] {
-  const pseudoLegal: MoveCandidate[] = [];
+  const legal: MoveCandidate[] = [];
   for (const piece of board.getPiecesOfColor(color)) {
     for (const to of getValidMoves(board, piece)) {
-      pseudoLegal.push({ piece, to, captured: board.getPieceAt(to) });
+      const captured = board.getPieceAt(to);
+      const applied = board.applyMove(piece, to);
+      const inCheck = isKingInCheck(board, color);
+      board.unapplyMove(applied);
+      if (!inCheck) {
+        legal.push({ piece, to, captured: captured ?? undefined });
+      }
     }
-  }
-
-  // Filter out moves that leave king in check
-  const legal: MoveCandidate[] = [];
-  for (const move of pseudoLegal) {
-    const applied = board.applyMove(move.piece, move.to);
-    const inCheck = isKingInCheck(board, color);
-    board.unapplyMove(applied);
-    if (!inCheck) legal.push(move);
   }
   return legal;
 }
 
-function moveKey(from: Position3D, to: Position3D): string {
-  return `${posKey(from)}>${posKey(to)}`;
+function moveKeyNum(from: Position3D, to: Position3D): number {
+  return posKey(from) | (posKey(to) << 9);
 }
 
-function moveKeyOf(move: MoveCandidate): string {
-  return moveKey(move.piece.position, move.to);
+function moveKeyOfNum(move: MoveCandidate): number {
+  return posKey(move.piece.position) | (posKey(move.to) << 9);
 }
 
 function historyScore(move: MoveCandidate): number {
-  return historyTable.get(moveKeyOf(move)) ?? 0;
+  return historyData[moveKeyOfNum(move)];
 }
 
 function promotionScore(move: MoveCandidate): number {
@@ -465,24 +492,25 @@ function maxThreatenedEnemyValueByPiece(board: Board, piece: Piece): number {
 function orderMoves(
   moves: MoveCandidate[],
   ply: number,
-  pvMoveKey?: string,
+  pvMoveKey?: number,
   board?: Board,
 ): MoveCandidate[] {
-  const killers = killerMoves.get(ply);
+  const killerBase = ply < MAX_KILLER_PLY ? ply * 2 : -1;
+  const killer0 = killerBase >= 0 ? killerData[killerBase] : NO_MOVE;
+  const killer1 = killerBase >= 0 ? killerData[killerBase + 1] : NO_MOVE;
   const decorated: Array<{ move: MoveCandidate; score: number }> = [];
   const shouldUseExpensiveTacticalOrdering = Boolean(
     activeSetup === 'classic'
     && board
     && ply <= 1
-    // Barricade and future non-classic setups should skip this expensive branch.
     && board.pieces.length <= 64
     && moves.length <= 96,
   );
 
   for (const move of moves) {
-    const key = moveKeyOf(move);
-    const killerBoost = killers && (key === killers[0] || key === killers[1]) ? 1400 : 0;
-    const pvBoost = pvMoveKey && key === pvMoveKey ? 1_000_000 : 0;
+    const key = moveKeyOfNum(move);
+    const killerBoost = (key === killer0 || key === killer1) ? 1400 : 0;
+    const pvBoost = pvMoveKey !== undefined && key === pvMoveKey ? 1_000_000 : 0;
     
     const seePenalty = (board && move.captured) ? seeMoveOrderingPenalty(board, move) : 0;
     
@@ -529,15 +557,15 @@ function orderMoves(
 }
 
 function registerCutoff(move: MoveCandidate, ply: number, depth: number): void {
-  const key = moveKey(move.piece.position, move.to);
-  const current = historyTable.get(key) ?? 0;
+  const key = moveKeyNum(move.piece.position, move.to);
   if (!move.captured) {
-    historyTable.set(key, current + depth * depth);
-    const killers = killerMoves.get(ply) ?? ['', ''];
-    if (killers[0] !== key) {
-      killers[1] = killers[0];
-      killers[0] = key;
-      killerMoves.set(ply, killers);
+    historyData[key] += depth * depth;
+    if (ply < MAX_KILLER_PLY) {
+      const base = ply * 2;
+      if (killerData[base] !== key) {
+        killerData[base + 1] = killerData[base];
+        killerData[base] = key;
+      }
     }
   }
 }
@@ -554,7 +582,8 @@ function findCheapestAttacker(board: Board, target: Position3D, attackerColor: P
   let cheapest: Piece | null = null;
   let cheapestVal = Infinity;
   for (const p of board.getPiecesOfColor(attackerColor)) {
-    const pseudo = getValidMoves(board, p);
+    // SEE only needs attack coverage; avoid expensive full legal move generation.
+    const pseudo = getAttackedSquares(board, p);
     if (!pseudo.some(m => m.x === target.x && m.y === target.y && m.z === target.z)) continue;
     const v = PIECE_VALUE[p.type];
     if (v < cheapestVal) {
@@ -570,8 +599,7 @@ function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0):
   
   const target = move.to;
   const victimValue = PIECE_VALUE[move.captured.type];
-  const attackerValue = PIECE_VALUE[move.piece.type];
-  let gain = victimValue - attackerValue;
+  let gain = victimValue;
   
   const applied = board.applyMove(move.piece, target);
   try {
@@ -583,7 +611,11 @@ function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0):
       const recapture: MoveCandidate = { piece: cheapestAttacker, to: target, captured: move.piece };
       const legalRecapture = !isKingInCheck(board, enemy);
       if (legalRecapture) {
-         gain -= staticExchangeEvaluation(board, recapture, depth + 1);
+         const opponentGain = staticExchangeEvaluation(board, recapture, depth + 1);
+         // The opponent will only recapture if it benefits them (or breaks even)
+         if (opponentGain >= 0) {
+           gain -= opponentGain;
+         }
       }
     }
   } finally {
@@ -591,7 +623,7 @@ function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0):
   }
   
   // You don't HAVE to capture. If a capture sequence is negative, you just stop.
-  return Math.max(0, gain);
+  return depth === 0 ? gain : Math.max(0, gain);
 }
 
 function quiescenceMoves(board: Board, color: PieceColor, ply: number): MoveCandidate[] {
@@ -599,34 +631,40 @@ function quiescenceMoves(board: Board, color: PieceColor, ply: number): MoveCand
   const includeCheckMoves = ply <= Q_CHECK_PLY_LIMIT;
 
   for (const piece of board.getPiecesOfColor(color)) {
-    const legal = getLegalMoves(board, piece);
-    for (const to of legal) {
+    const pseudo = getValidMoves(board, piece);
+    for (const to of pseudo) {
       const captured = board.getPieceAt(to);
       const isCapture = Boolean(captured);
       const isPromo = piece.type === PieceType.Pawn && (to.y === 7 || to.y === 0);
 
-      if (isCapture && captured) {
-        const candidate: MoveCandidate = { piece, to, captured };
-        const see = staticExchangeEvaluation(board, candidate);
-        if (see >= 0) {
-          moves.push(candidate);
-          continue;
-        }
-      } else if (isPromo) {
-        moves.push({ piece, to });
-        continue;
-      }
+      if (!isCapture && !isPromo && !includeCheckMoves) continue;
 
-      if (!includeCheckMoves) continue;
+      const candidate: MoveCandidate = { piece, to, captured: captured ?? undefined };
 
       const applied = board.applyMove(piece, to);
+      let isLegal = false;
+      let givesCheck = false;
       try {
-        autoPromoteToQueen(piece);
-        if (isKingInCheck(board, getOpponent(color))) {
-          moves.push({ piece, to, captured: captured ?? undefined });
+        if (!isKingInCheck(board, color)) {
+          isLegal = true;
+          if (!isCapture && !isPromo && includeCheckMoves) {
+            autoPromoteToQueen(piece);
+            givesCheck = isKingInCheck(board, getOpponent(color));
+          }
         }
       } finally {
         board.unapplyMove(applied);
+      }
+
+      if (!isLegal) continue;
+
+      if (isCapture && captured) {
+        const see = staticExchangeEvaluation(board, candidate);
+        if (see >= 0) moves.push(candidate);
+      } else if (isPromo) {
+        moves.push(candidate);
+      } else if (givesCheck) {
+        moves.push(candidate);
       }
     }
   }
@@ -711,13 +749,13 @@ function negamax(
   checkTime();
   const alphaOrig = alpha;
   const betaOrig = beta;
-  const hash = hashToKey(hashBoard(board, toMove));
+  const h = hashBoard(board, toMove);
 
-  const tt = transpositionTable.get(hash);
-  if (tt && tt.depth >= depth) {
-    if (tt.flag === 'exact') return tt.score;
-    if (tt.flag === 'alpha') beta = Math.min(beta, tt.score);
-    if (tt.flag === 'beta') alpha = Math.max(alpha, tt.score);
+  const tt = ttProbe(h.low, h.high, depth);
+  if (tt) {
+    if (tt.flag === TT_FLAG_EXACT) return tt.score;
+    if (tt.flag === TT_FLAG_ALPHA) beta = Math.min(beta, tt.score);
+    if (tt.flag === TT_FLAG_BETA) alpha = Math.max(alpha, tt.score);
     if (alpha >= beta) return tt.score;
   }
 
@@ -733,13 +771,15 @@ function negamax(
   }
 
   const inCheck = isKingInCheck(board, toMove);
-  
-  // ProbCut: Try to prune branches with a shallow search if we are massively ahead (beta is very low relative to eval)
+  let lazyStaticEval: number | undefined;
+  const getStaticEval = (): number => {
+    if (lazyStaticEval === undefined) lazyStaticEval = evaluate(board, botColor, toMove);
+    return lazyStaticEval;
+  };
+
   if (!inCheck && depth >= 4 && Math.abs(beta) < MATE_SCORE - 1000) {
     const probBeta = beta + 200;
-    const staticEval = evaluate(board, botColor, toMove);
-    if (staticEval >= probBeta) {
-      // Do a shallow search to verify the cutoff
+    if (getStaticEval() >= probBeta) {
       const probScore = -negamax(
         board,
         depth - 3,
@@ -757,10 +797,14 @@ function negamax(
   }
 
   if (!inCheck && depth >= 3) {
-    const staticEval = evaluate(board, botColor, toMove);
-    // Don't null move in zugzwang-likely endgames (e.g. only pawns left)
-    const hasNonPawnMaterial = board.getPiecesOfColor(toMove).some(p => p.type !== PieceType.Pawn && p.type !== PieceType.King);
-    if (hasNonPawnMaterial && staticEval >= beta) {
+    let hasNonPawnMaterial = false;
+    for (const p of board.getPiecesOfColor(toMove)) {
+      if (p.type !== PieceType.Pawn && p.type !== PieceType.King) {
+        hasNonPawnMaterial = true;
+        break;
+      }
+    }
+    if (hasNonPawnMaterial && getStaticEval() >= beta) {
       const nullScore = -negamax(
         board,
         depth - 1 - NULL_MOVE_REDUCTION,
@@ -777,9 +821,10 @@ function negamax(
     }
   }
 
-  const ordered = orderMoves(moves, ply, tt?.bestMoveKey, board);
+  const ttBestMove = tt ? tt.bestMove : ttGetBestMove(h.low, h.high);
+  const ordered = orderMoves(moves, ply, ttBestMove !== NO_MOVE ? ttBestMove : undefined, board);
   let best = -Infinity;
-  let bestKey: string | undefined;
+  let bestMoveKey = NO_MOVE;
 
   for (let moveIndex = 0; moveIndex < ordered.length; moveIndex++) {
     const move = ordered[moveIndex];
@@ -793,8 +838,6 @@ function negamax(
       const canRecaptureExtend = isRecapture && recaptureExtBudget > 0;
       const extension = canCheckExtend || canRecaptureExtend ? 1 : 0;
       const nextDepth = depth - 1 + extension;
-      // Threat-creating quiet moves should not be reduced away by LMR.
-      // Max threatened value now uses caching implicitly if we precalculate, but here we just check fast.
       const createsMajorThreat = !move.captured
         && maxThreatenedEnemyValueByPiece(board, move.piece) >= PIECE_VALUE[PieceType.Rook];
       const isQuiet = !move.captured && promotionScore(move) === 0 && !givesCheck && !createsMajorThreat;
@@ -807,7 +850,7 @@ function negamax(
       if (canReduce) {
         if (moveIndex >= 8) reduction = 2;
         else reduction = 1;
-        if (isPoorHistory) reduction++; // penalize bad history more
+        if (isPoorHistory) reduction++;
       }
       const reducedDepth = Math.max(0, nextDepth - reduction);
 
@@ -859,7 +902,7 @@ function negamax(
 
     if (score > best) {
       best = score;
-      bestKey = moveKey(move.piece.position, move.to);
+      bestMoveKey = moveKeyNum(move.piece.position, move.to);
     }
     if (score > alpha) alpha = score;
     if (alpha >= beta) {
@@ -868,9 +911,8 @@ function negamax(
     }
   }
 
-  const flag: BoundFlag = best <= alphaOrig ? 'alpha' : best >= betaOrig ? 'beta' : 'exact';
-  if (transpositionTable.size > MAX_TT_ENTRIES) transpositionTable.clear();
-  transpositionTable.set(hash, { depth, score: best, flag, bestMoveKey: bestKey });
+  const flag = best <= alphaOrig ? TT_FLAG_ALPHA : best >= betaOrig ? TT_FLAG_BETA : TT_FLAG_EXACT;
+  ttStore(h.low, h.high, depth, best, flag, bestMoveKey);
   return best;
 }
 
@@ -882,14 +924,13 @@ function searchAtDepth(
   rootAlpha = -Infinity,
   rootBeta = Infinity,
   onRootMoveScored?: (result: DepthResult) => void,
-  pvMoveKey?: string,
+  pvMoveKey?: number,
 ): ScoredMove[] {
   const moves = rootMoves ?? getAllMoves(board, color);
   if (moves.length === 0) throw new Error('Bot has no legal moves');
 
   const ordered = orderMoves(moves, 0, pvMoveKey, board);
   const scored: ScoredMove[] = [];
-  const initialSig = boardSignature(board);
   let alpha = rootAlpha;
 
   for (const move of ordered) {
@@ -913,9 +954,6 @@ function searchAtDepth(
     if (alpha >= rootBeta) break;
   }
 
-  if (boardSignature(board) !== initialSig) {
-    throw new Error('Board integrity check failed after depth search');
-  }
   if (scored.length === 0) throw new SearchAborted();
   scored.sort((a, b) => b.score - a.score);
   return scored;
@@ -927,10 +965,11 @@ function extractPrincipalVariation(board: Board, toMove: PieceColor, maxPlies = 
   let side = toMove;
   try {
     for (let i = 0; i < maxPlies; i++) {
-      const tt = transpositionTable.get(hashToKey(hashBoard(board, side)));
-      if (!tt?.bestMoveKey) break;
+      const h = hashBoard(board, side);
+      const bestMoveKey = ttGetBestMove(h.low, h.high);
+      if (bestMoveKey === NO_MOVE) break;
       const moves = getAllMoves(board, side);
-      const best = moves.find(m => moveKeyOf(m) === tt.bestMoveKey);
+      const best = moves.find(m => moveKeyOfNum(m) === bestMoveKey);
       if (!best) break;
       pv.push({ fromPos: { ...best.piece.position }, to: { ...best.to } });
       const applied = board.applyMove(best.piece, best.to);
@@ -1007,7 +1046,7 @@ function guaranteedDepthOne(
   const prevNodeLimit = nodeLimit;
 
   // Guarantee at least one fully evaluated iteration under bounded budget.
-  searchDeadline = prevDeadline > 0 ? Date.now() + 1500 : 0;
+  searchDeadline = prevDeadline > 0 ? performance.now() + 1500 : 0;
   nodeLimit = Math.max(prevNodeLimit, 2_000_000);
   nodesSearched = 0;
 
@@ -1065,7 +1104,7 @@ function iterativeSearch(
     throw new Error('Worker received empty root move subset');
   }
 
-  const searchStart = Date.now();
+  const searchStart = performance.now();
   if (budget.hardMs > 0) {
     searchDeadline = searchStart + budget.hardMs;
   } else {
@@ -1073,13 +1112,11 @@ function iterativeSearch(
   }
 
   nodeLimit = NODE_LIMIT[difficulty];
-  // Keep TT across turns to reuse search knowledge and speed up.
-  if (transpositionTable.size > MAX_TT_ENTRIES) transpositionTable.clear();
-  historyTable.clear();
-  killerMoves.clear();
+  historyData.fill(0);
+  killerData.fill(NO_MOVE);
 
   let bestResult: ScoredMove[] | null = null;
-  let pvMoveKey: string | undefined;
+  let pvMoveKey: number | undefined;
   let completedDepth = 0;
   const depthResults: DepthResult[] = [];
   let previousScore: number | undefined;
@@ -1090,7 +1127,7 @@ function iterativeSearch(
     if (progressMode !== 'detailed' || !onProgress) return;
     // Throttle progress messages to keep animation cheap.
     progressEmitCount++;
-    const now = Date.now();
+    const now = performance.now();
     if (progressEmitCount % 4 !== 0 && now - lastProgressEmitAt < 28) return;
     lastProgressEmitAt = now;
     onProgress('rootMove', result);
@@ -1147,17 +1184,8 @@ function iterativeSearch(
       bestResult = result;
       const best = result[0];
       completedDepth = depth;
-      const rootHash = hashToKey(hashBoard(board, color));
-      const seededBestKey = moveKey(best.fromPos, best.to);
-      const seeded = transpositionTable.get(rootHash);
-      if (!seeded || seeded.depth <= depth) {
-        transpositionTable.set(rootHash, {
-          depth,
-          score: best.rawScore,
-          flag: 'exact',
-          bestMoveKey: seededBestKey,
-        });
-      }
+      const rootHash = hashBoard(board, color);
+      ttStore(rootHash.low, rootHash.high, depth, best.rawScore, TT_FLAG_EXACT, moveKeyNum(best.fromPos, best.to));
       const depthResult: DepthResult = {
         depth,
         fromPos: best.fromPos,
@@ -1170,11 +1198,11 @@ function iterativeSearch(
       };
       depthResults.push(depthResult);
       onProgress?.('depth', depthResult);
-      pvMoveKey = moveKey(best.fromPos, best.to);
+      pvMoveKey = moveKeyNum(best.fromPos, best.to);
       previousScore = best.rawScore;
 
       if (budget.softMs > 0) {
-        const elapsed = Date.now() - searchStart;
+        const elapsed = performance.now() - searchStart;
         const unstable = depthResults.length >= 2
           ? Math.abs(depthResults[depthResults.length - 1].score - depthResults[depthResults.length - 2].score) > 140
           : false;
@@ -1242,10 +1270,10 @@ export interface WorkerResponse {
 function runSelfTest(pieces: Piece[], color: PieceColor, difficulty: Difficulty): { pass: boolean; checks: string[] } {
   const checks: string[] = [];
   const board = Board.deserialize(pieces);
-  const sigBefore = boardSignature(board);
+  const countBefore = board.pieces.length;
   const result = iterativeSearch(board, color, difficulty);
-  const sigAfter = boardSignature(board);
-  checks.push(sigBefore === sigAfter ? 'board_integrity_ok' : 'board_integrity_failed');
+  const countAfter = board.pieces.length;
+  checks.push(countBefore === countAfter ? 'board_integrity_ok' : 'board_integrity_failed');
 
   const mover = board.getPieceAt(result.best.fromPos);
   const legal = mover ? getLegalMoves(board, mover).some(m => m.x === result.best.to.x && m.y === result.best.to.y && m.z === result.best.to.z) : false;

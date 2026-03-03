@@ -7,6 +7,12 @@ const BACK_RANK: PieceType[] = [
 
 export class Board {
   pieces: Piece[] = [];
+  whitePieces: Set<Piece> = new Set();
+  blackPieces: Set<Piece> = new Set();
+  kings: Record<PieceColor, Piece | undefined> = {
+    [PieceColor.White]: undefined,
+    [PieceColor.Black]: undefined,
+  };
 
   private pieceMap: Array<Piece | undefined>;
 
@@ -17,6 +23,10 @@ export class Board {
 
   reset(setup: SetupMode = 'classic'): void {
     this.pieces = [];
+    this.whitePieces.clear();
+    this.blackPieces.clear();
+    this.kings[PieceColor.White] = undefined;
+    this.kings[PieceColor.Black] = undefined;
     this.pieceMap.fill(undefined);
 
     const centerZ = 3; // layer 4 (1-indexed) — center of cube
@@ -83,10 +93,25 @@ export class Board {
   private addPiece(piece: Piece): void {
     this.pieces.push(piece);
     this.pieceMap[posKey(piece.position)] = piece;
+    if (piece.color === PieceColor.White) this.whitePieces.add(piece);
+    else this.blackPieces.add(piece);
+    if (piece.type === PieceType.King) this.kings[piece.color] = piece;
   }
 
   getPieceAt(pos: Position3D): Piece | undefined {
     return this.pieceMap[posKey(pos)];
+  }
+
+  getPieceAtXYZ(x: number, y: number, z: number): Piece | undefined {
+    return this.pieceMap[(x & 7) | ((y & 7) << 3) | ((z & 7) << 6)];
+  }
+
+  isInBounds(pos: Position3D): boolean {
+    return pos.x >= 0 && pos.x < 8 && pos.y >= 0 && pos.y < 8 && pos.z >= 0 && pos.z < 8;
+  }
+
+  isInBoundsXYZ(x: number, y: number, z: number): boolean {
+    return x >= 0 && x < 8 && y >= 0 && y < 8 && z >= 0 && z < 8;
   }
 
   movePiece(piece: Piece, to: Position3D): Piece | undefined {
@@ -109,10 +134,8 @@ export class Board {
     const previousHasMoved = piece.hasMoved;
     const previousType = piece.type;
     let captured = this.getPieceAt(to);
-    let capturedIndex = -1;
 
     if (captured) {
-      capturedIndex = this.pieces.indexOf(captured);
       this.removePiece(captured);
     }
 
@@ -126,14 +149,13 @@ export class Board {
       from,
       to,
       captured,
-      capturedIndex,
       previousHasMoved,
       previousType,
     };
   }
 
   unapplyMove(applied: AppliedMove): void {
-    const { piece, from, captured, capturedIndex, previousHasMoved, previousType } = applied;
+    const { piece, from, captured, previousHasMoved, previousType } = applied;
     this.pieceMap[posKey(piece.position)] = undefined;
     piece.position = from;
     piece.hasMoved = previousHasMoved;
@@ -144,40 +166,49 @@ export class Board {
       // Restore capture without clone.
       captured.position = applied.to;
       this.pieceMap[posKey(applied.to)] = captured;
-      if (capturedIndex >= 0 && capturedIndex <= this.pieces.length) {
-        this.pieces.splice(capturedIndex, 0, captured);
-      } else {
-        this.pieces.push(captured);
-      }
+      this.pieces.push(captured);
+      if (captured.color === PieceColor.White) this.whitePieces.add(captured);
+      else this.blackPieces.add(captured);
+      if (captured.type === PieceType.King) this.kings[captured.color] = captured;
     }
   }
 
   removePiece(piece: Piece): void {
     this.pieceMap[posKey(piece.position)] = undefined;
     const idx = this.pieces.indexOf(piece);
-    if (idx >= 0) this.pieces.splice(idx, 1);
+    if (idx >= 0) {
+      const last = this.pieces[this.pieces.length - 1];
+      this.pieces[idx] = last;
+      this.pieces.pop();
+    }
+    if (piece.color === PieceColor.White) this.whitePieces.delete(piece);
+    else this.blackPieces.delete(piece);
+    if (piece.type === PieceType.King) this.kings[piece.color] = undefined;
   }
 
-  isInBounds(pos: Position3D): boolean {
-    return pos.x >= 0 && pos.x < 8 && pos.y >= 0 && pos.y < 8 && pos.z >= 0 && pos.z < 8;
-  }
-
-  getPiecesOfColor(color: PieceColor): Piece[] {
-    return this.pieces.filter(p => p.color === color);
+  getPiecesOfColor(color: PieceColor): Set<Piece> {
+    return color === PieceColor.White ? this.whitePieces : this.blackPieces;
   }
 
   findKing(color: PieceColor): Piece | undefined {
-    return this.pieces.find(p => p.type === PieceType.King && p.color === color);
+    return this.kings[color];
   }
 
   clone(): Board {
     const b = new Board();
     b.pieces = [];
+    b.whitePieces.clear();
+    b.blackPieces.clear();
+    b.kings[PieceColor.White] = undefined;
+    b.kings[PieceColor.Black] = undefined;
     b.pieceMap.fill(undefined);
     for (const p of this.pieces) {
       const copy: Piece = { type: p.type, color: p.color, position: { ...p.position }, hasMoved: p.hasMoved };
       b.pieces.push(copy);
       b.pieceMap[posKey(copy.position)] = copy;
+      if (copy.color === PieceColor.White) b.whitePieces.add(copy);
+      else b.blackPieces.add(copy);
+      if (copy.type === PieceType.King) b.kings[copy.color] = copy;
     }
     return b;
   }
@@ -194,11 +225,18 @@ export class Board {
   static deserialize(data: Piece[]): Board {
     const b = new Board();
     b.pieces = [];
+    b.whitePieces.clear();
+    b.blackPieces.clear();
+    b.kings[PieceColor.White] = undefined;
+    b.kings[PieceColor.Black] = undefined;
     b.pieceMap.fill(undefined);
     for (const p of data) {
       const piece: Piece = { type: p.type, color: p.color, position: { ...p.position }, hasMoved: p.hasMoved };
       b.pieces.push(piece);
       b.pieceMap[posKey(piece.position)] = piece;
+      if (piece.color === PieceColor.White) b.whitePieces.add(piece);
+      else b.blackPieces.add(piece);
+      if (piece.type === PieceType.King) b.kings[piece.color] = piece;
     }
     return b;
   }
@@ -209,7 +247,6 @@ export interface AppliedMove {
   from: Position3D;
   to: Position3D;
   captured?: Piece;
-  capturedIndex: number;
   previousHasMoved: boolean;
   previousType: PieceType;
 }

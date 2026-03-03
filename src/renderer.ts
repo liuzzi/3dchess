@@ -110,6 +110,34 @@ export class Renderer {
   private yLabels: THREE.Sprite[] = [];
   private zLabels: THREE.Sprite[] = [];
 
+  private tempVec1 = new THREE.Vector3();
+  private tempVec2 = new THREE.Vector3();
+  private screenUp = new THREE.Vector3();
+  private screenRight = new THREE.Vector3();
+  private lastCamX = NaN;
+  private lastCamY = NaN;
+  private lastCamZ = NaN;
+  private lastCamQx = NaN;
+
+  private cornersYZ = [
+    { y: -1.0, z: -1.0 },
+    { y: 8.0, z: -1.0 },
+    { y: -1.0, z: 8.0 },
+    { y: 8.0, z: 8.0 }
+  ];
+  private cornersXY = [
+    { x: -1.0, y: -1.0 },
+    { x: 8.0, y: -1.0 },
+    { x: -1.0, y: 8.0 },
+    { x: 8.0, y: 8.0 }
+  ];
+  private cornersXZ = [
+    { x: -1.0, z: -1.0 },
+    { x: 8.0, z: -1.0 },
+    { x: -1.0, z: 8.0 },
+    { x: 8.0, z: 8.0 }
+  ];
+
   private addAxisLabels(): void {
     // x-axis: columns (a-h) along 3D X
     const colLabels = ['a','b','c','d','e','f','g','h'];
@@ -137,75 +165,59 @@ export class Renderer {
   }
 
   private updateAxisLabels(): void {
-    const minBound = -1.0;
-    const maxBound = 8.0;
-
+    const cp = this.camera.position;
+    const cq = this.camera.quaternion;
+    if (cp.x === this.lastCamX && cp.y === this.lastCamY &&
+        cp.z === this.lastCamZ && cq.x === this.lastCamQx) return;
+    this.lastCamX = cp.x;
+    this.lastCamY = cp.y;
+    this.lastCamZ = cp.z;
+    this.lastCamQx = cq.x;
     this.camera.updateMatrixWorld();
-    const screenUp = new THREE.Vector3(0, 1, 0).transformDirection(this.camera.matrixWorld);
-    const screenRight = new THREE.Vector3(1, 0, 0).transformDirection(this.camera.matrixWorld);
+    this.screenUp.set(0, 1, 0).transformDirection(this.camera.matrixWorld);
+    this.screenRight.set(1, 0, 0).transformDirection(this.camera.matrixWorld);
 
     // X Labels (columns a-h)
-    const cornersYZ = [
-      { y: minBound, z: minBound },
-      { y: maxBound, z: minBound },
-      { y: minBound, z: maxBound },
-      { y: maxBound, z: maxBound }
-    ];
-
-    cornersYZ.sort((a, b) => {
-      const dotA = new THREE.Vector3(3.5, a.y, a.z).dot(screenUp);
-      const dotB = new THREE.Vector3(3.5, b.y, b.z).dot(screenUp);
+    this.cornersYZ.sort((a, b) => {
+      const dotA = this.tempVec1.set(3.5, a.y, a.z).dot(this.screenUp);
+      const dotB = this.tempVec2.set(3.5, b.y, b.z).dot(this.screenUp);
       if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB;
-      const distA = new THREE.Vector3(3.5, a.y, a.z).distanceToSquared(this.camera.position);
-      const distB = new THREE.Vector3(3.5, b.y, b.z).distanceToSquared(this.camera.position);
+      const distA = this.tempVec1.set(3.5, a.y, a.z).distanceToSquared(this.camera.position);
+      const distB = this.tempVec2.set(3.5, b.y, b.z).distanceToSquared(this.camera.position);
       return distA - distB;
     });
 
-    const bottomMostYZ = cornersYZ[0];
+    const bottomMostYZ = this.cornersYZ[0];
     for (let i = 0; i < 8; i++) {
       this.xLabels[i].position.set(i, bottomMostYZ.y, bottomMostYZ.z);
     }
 
     // Y Labels (rows 1-8, deep along Z)
-    const cornersXY = [
-      { x: minBound, y: minBound },
-      { x: maxBound, y: minBound },
-      { x: minBound, y: maxBound },
-      { x: maxBound, y: maxBound }
-    ];
-
-    cornersXY.sort((a, b) => {
-      const dotA = new THREE.Vector3(a.x, a.y, 3.5).dot(screenUp);
-      const dotB = new THREE.Vector3(b.x, b.y, 3.5).dot(screenUp);
+    this.cornersXY.sort((a, b) => {
+      const dotA = this.tempVec1.set(a.x, a.y, 3.5).dot(this.screenUp);
+      const dotB = this.tempVec2.set(b.x, b.y, 3.5).dot(this.screenUp);
       if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB;
-      const distA = new THREE.Vector3(a.x, a.y, 3.5).distanceToSquared(this.camera.position);
-      const distB = new THREE.Vector3(b.x, b.y, 3.5).distanceToSquared(this.camera.position);
+      const distA = this.tempVec1.set(a.x, a.y, 3.5).distanceToSquared(this.camera.position);
+      const distB = this.tempVec2.set(b.x, b.y, 3.5).distanceToSquared(this.camera.position);
       return distA - distB;
     });
 
-    const bottomMostXY = cornersXY[0];
+    const bottomMostXY = this.cornersXY[0];
     for (let i = 0; i < 8; i++) {
       this.yLabels[i].position.set(bottomMostXY.x, bottomMostXY.y, i);
     }
 
     // Z Labels (layers L1-L8, vertical along Y)
-    const cornersXZ = [
-      { x: minBound, z: minBound },
-      { x: maxBound, z: minBound },
-      { x: minBound, z: maxBound },
-      { x: maxBound, z: maxBound }
-    ];
-
-    cornersXZ.sort((a, b) => {
-      const dotA = new THREE.Vector3(a.x, 3.5, a.z).dot(screenRight);
-      const dotB = new THREE.Vector3(b.x, 3.5, b.z).dot(screenRight);
+    this.cornersXZ.sort((a, b) => {
+      const dotA = this.tempVec1.set(a.x, 3.5, a.z).dot(this.screenRight);
+      const dotB = this.tempVec2.set(b.x, 3.5, b.z).dot(this.screenRight);
       if (Math.abs(dotA - dotB) > 0.001) return dotA - dotB; // Minimum dot is leftmost
-      const distA = new THREE.Vector3(a.x, 3.5, a.z).distanceToSquared(this.camera.position);
-      const distB = new THREE.Vector3(b.x, 3.5, b.z).distanceToSquared(this.camera.position);
+      const distA = this.tempVec1.set(a.x, 3.5, a.z).distanceToSquared(this.camera.position);
+      const distB = this.tempVec2.set(b.x, 3.5, b.z).distanceToSquared(this.camera.position);
       return distA - distB;
     });
     
-    const leftCorner = cornersXZ[0];
+    const leftCorner = this.cornersXZ[0];
     for (let i = 0; i < 8; i++) {
       this.zLabels[i].position.set(leftCorner.x, i, leftCorner.z);
     }

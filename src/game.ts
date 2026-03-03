@@ -201,6 +201,10 @@ export class Game {
     const occupant = this.board.getPieceAt(to);
     if (occupant && occupant.color === piece.color) return false;
 
+    if (this._selectedPiece === piece) {
+      return this._validMoves.some(m => posEqual(m, to));
+    }
+
     return getLegalMoves(this.board, piece).some(m => posEqual(m, to));
   }
 
@@ -285,15 +289,17 @@ export class Game {
     this.gameOver = false;
     this.botThinking = false;
 
-    if (isKingInCheck(this.board, this.currentTurn)) {
+    const inCheck = isKingInCheck(this.board, this.currentTurn);
+
+    if (inCheck) {
       const checkPath = getCheckPath(this.board, this.currentTurn);
       this.emit({ type: 'check', data: { color: this.currentTurn, checkPath } });
     }
 
-    if (isCheckmate(this.board, this.currentTurn)) {
+    if (isCheckmate(this.board, this.currentTurn, inCheck)) {
       this.gameOver = true;
       this.emit({ type: 'checkmate', data: { loser: this.currentTurn } });
-    } else if (isStalemate(this.board, this.currentTurn)) {
+    } else if (isStalemate(this.board, this.currentTurn, inCheck)) {
       this.gameOver = true;
       this.emit({ type: 'stalemate' });
     }

@@ -7,6 +7,11 @@ export interface ThreatPair {
   to: Position3D;
 }
 
+export interface ThreatPairsByAttacker {
+  white: ThreatPair[];
+  black: ThreatPair[];
+}
+
 function collectThreatPairs(
   board: Board,
   attackerColor: PieceColor,
@@ -33,12 +38,32 @@ export function computeThreatLinesAfterMove(
   return collectThreatPairs(board, moverColor, targetColor);
 }
 
+export function computeThreatLinesByAttacker(board: Board): ThreatPairsByAttacker {
+  const white: ThreatPair[] = [];
+  const black: ThreatPair[] = [];
+  for (const attacker of board.pieces) {
+    const attacks = getValidMoves(board, attacker);
+    for (const attackPos of attacks) {
+      const occ = board.getPieceAt(attackPos);
+      if (!occ || occ.color === attacker.color) continue;
+      const pair = { from: { ...attacker.position }, to: { ...attackPos } };
+      if (attacker.color === PieceColor.White) {
+        white.push(pair);
+      } else {
+        black.push(pair);
+      }
+    }
+  }
+  return { white, black };
+}
+
 export function computeProtectionLinesForThreatenedPieces(
   board: Board,
   attackerColor: PieceColor,
+  precomputedThreats?: ThreatPair[],
 ): ThreatPair[] {
   const threatenedColor = attackerColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
-  const threats = collectThreatPairs(board, attackerColor, threatenedColor);
+  const threats = precomputedThreats ?? collectThreatPairs(board, attackerColor, threatenedColor);
   if (threats.length === 0) return [];
 
   const threatenedSquares = new Map<string, Position3D>();
@@ -74,28 +99,31 @@ export function computeHoverThreatPreview(
 ): { dangerPairs: ThreatPair[]; threatPairs: ThreatPair[]; protectionPairs: ThreatPair[] } | null {
   const myColor = selectedPiece.color;
   const enemyColor = myColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
-  const sim = board.clone();
-  const simPiece = sim.getPieceAt(selectedPiece.position);
-  if (!simPiece) return null;
-  sim.movePiece(simPiece, hoverPos);
-  const landedPiece = sim.getPieceAt(hoverPos);
-  if (!landedPiece) return null;
+  const applied = board.applyMove(selectedPiece, hoverPos);
+  try {
+    const landedPiece = selectedPiece;
 
-  // Treat the hovered piece as enemy while scanning allied moves so legal capture
-  // generation can be reused to determine which allies protect this square.
-  landedPiece.color = enemyColor;
-  const protectionPairs: ThreatPair[] = [];
-  for (const protector of sim.getPiecesOfColor(myColor)) {
-    const moves = getValidMoves(sim, protector);
-    if (moves.some((m) => m.x === hoverPos.x && m.y === hoverPos.y && m.z === hoverPos.z)) {
-      protectionPairs.push({ from: { ...protector.position }, to: { ...hoverPos } });
+    // Treat the hovered piece as enemy while scanning allied moves so legal capture
+    // generation can be reused to determine which allies protect this square.
+    const protectionPairs: ThreatPair[] = [];
+    landedPiece.color = enemyColor;
+    try {
+      for (const protector of board.getPiecesOfColor(myColor)) {
+        const moves = getValidMoves(board, protector);
+        if (moves.some((m) => m.x === hoverPos.x && m.y === hoverPos.y && m.z === hoverPos.z)) {
+          protectionPairs.push({ from: { ...protector.position }, to: { ...hoverPos } });
+        }
+      }
+    } finally {
+      landedPiece.color = myColor;
     }
-  }
-  landedPiece.color = myColor;
 
-  return {
-    dangerPairs: collectThreatPairs(sim, enemyColor, myColor),
-    threatPairs: collectThreatPairs(sim, myColor, enemyColor),
-    protectionPairs,
-  };
+    return {
+      dangerPairs: collectThreatPairs(board, enemyColor, myColor),
+      threatPairs: collectThreatPairs(board, myColor, enemyColor),
+      protectionPairs,
+    };
+  } finally {
+    board.unapplyMove(applied);
+  }
 }

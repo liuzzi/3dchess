@@ -46,14 +46,13 @@ function slideMoves(board: Board, piece: Piece, dirs: Dir[]): Position3D[] {
     let { x, y, z } = piece.position;
     while (true) {
       x += dx; y += dy; z += dz;
-      const pos: Position3D = { x, y, z };
-      if (!board.isInBounds(pos)) break;
-      const occupant = board.getPieceAt(pos);
+      if (!board.isInBoundsXYZ(x, y, z)) break;
+      const occupant = board.getPieceAtXYZ(x, y, z);
       if (occupant) {
-        if (occupant.color !== piece.color) results.push(pos);
+        if (occupant.color !== piece.color) results.push({ x, y, z });
         break;
       }
-      results.push(pos);
+      results.push({ x, y, z });
     }
   }
   return results;
@@ -62,15 +61,13 @@ function slideMoves(board: Board, piece: Piece, dirs: Dir[]): Position3D[] {
 function stepMoves(board: Board, piece: Piece, dirs: Dir[]): Position3D[] {
   const results: Position3D[] = [];
   for (const [dx, dy, dz] of dirs) {
-    const pos: Position3D = {
-      x: piece.position.x + dx,
-      y: piece.position.y + dy,
-      z: piece.position.z + dz,
-    };
-    if (!board.isInBounds(pos)) continue;
-    const occupant = board.getPieceAt(pos);
+    const x = piece.position.x + dx;
+    const y = piece.position.y + dy;
+    const z = piece.position.z + dz;
+    if (!board.isInBoundsXYZ(x, y, z)) continue;
+    const occupant = board.getPieceAtXYZ(x, y, z);
     if (occupant && occupant.color === piece.color) continue;
-    results.push(pos);
+    results.push({ x, y, z });
   }
   return results;
 }
@@ -89,13 +86,13 @@ function pawnMoves(board: Board, piece: Piece): Position3D[] {
   ];
 
   for (const [dx, dy, dz] of moveDirs) {
-    const step1: Position3D = { x: x + dx, y: y + dy, z: z + dz };
-    if (!board.isInBounds(step1) || board.getPieceAt(step1)) continue;
-    results.push(step1);
+    const x1 = x + dx; const y1 = y + dy; const z1 = z + dz;
+    if (!board.isInBoundsXYZ(x1, y1, z1) || board.getPieceAtXYZ(x1, y1, z1)) continue;
+    results.push({ x: x1, y: y1, z: z1 });
     if (!piece.hasMoved) {
-      const step2: Position3D = { x: x + dx * 2, y: y + dy * 2, z: z + dz * 2 };
-      if (board.isInBounds(step2) && !board.getPieceAt(step2)) {
-        results.push(step2);
+      const x2 = x + dx * 2; const y2 = y + dy * 2; const z2 = z + dz * 2;
+      if (board.isInBoundsXYZ(x2, y2, z2) && !board.getPieceAtXYZ(x2, y2, z2)) {
+        results.push({ x: x2, y: y2, z: z2 });
       }
     }
   }
@@ -103,13 +100,81 @@ function pawnMoves(board: Board, piece: Piece): Position3D[] {
   // Captures: only forward diagonals (same layer, one layer up, one layer down)
   for (const dz of [-1, 0, 1]) {
     for (const dx of [-1, 1]) {
-      const cap: Position3D = { x: x + dx, y: y + fwdDir, z: z + dz };
-      if (!board.isInBounds(cap)) continue;
-      const occ = board.getPieceAt(cap);
-      if (occ && occ.color !== piece.color) results.push(cap);
+      const cx = x + dx; const cy = y + fwdDir; const cz = z + dz;
+      if (!board.isInBoundsXYZ(cx, cy, cz)) continue;
+      const occ = board.getPieceAtXYZ(cx, cy, cz);
+      if (occ && occ.color !== piece.color) results.push({ x: cx, y: cy, z: cz });
     }
   }
 
+  return results;
+}
+
+export function getAttackedSquares(board: Board, piece: Piece): Position3D[] {
+  let candidates: Position3D[];
+
+  switch (piece.type) {
+    case PieceType.Rook:
+      candidates = slideAttacks(board, piece, ROOK_DIRS);
+      break;
+    case PieceType.Bishop:
+      candidates = slideAttacks(board, piece, BISHOP_DIRS);
+      break;
+    case PieceType.Queen:
+      candidates = slideAttacks(board, piece, QUEEN_DIRS);
+      break;
+    case PieceType.King:
+      candidates = stepAttacks(board, piece, KING_DIRS);
+      break;
+    case PieceType.Knight:
+      candidates = stepAttacks(board, piece, KNIGHT_MOVES);
+      break;
+    case PieceType.Pawn:
+      candidates = pawnAttacks(board, piece);
+      break;
+  }
+
+  return candidates;
+}
+
+function slideAttacks(board: Board, piece: Piece, dirs: Dir[]): Position3D[] {
+  const results: Position3D[] = [];
+  for (const [dx, dy, dz] of dirs) {
+    let { x, y, z } = piece.position;
+    while (true) {
+      x += dx; y += dy; z += dz;
+      if (!board.isInBoundsXYZ(x, y, z)) break;
+      results.push({ x, y, z });
+      if (board.getPieceAtXYZ(x, y, z)) break;
+    }
+  }
+  return results;
+}
+
+function stepAttacks(board: Board, piece: Piece, dirs: Dir[]): Position3D[] {
+  const results: Position3D[] = [];
+  for (const [dx, dy, dz] of dirs) {
+    const x = piece.position.x + dx;
+    const y = piece.position.y + dy;
+    const z = piece.position.z + dz;
+    if (!board.isInBoundsXYZ(x, y, z)) continue;
+    results.push({ x, y, z });
+  }
+  return results;
+}
+
+function pawnAttacks(board: Board, piece: Piece): Position3D[] {
+  const results: Position3D[] = [];
+  const fwdDir = piece.color === PieceColor.White ? 1 : -1;
+  const { x, y, z } = piece.position;
+
+  for (const dz of [-1, 0, 1]) {
+    for (const dx of [-1, 1]) {
+      const cx = x + dx; const cy = y + fwdDir; const cz = z + dz;
+      if (!board.isInBoundsXYZ(cx, cy, cz)) continue;
+      results.push({ x: cx, y: cy, z: cz });
+    }
+  }
   return results;
 }
 
@@ -147,7 +212,7 @@ function slideAttacksKing(board: Board, kingPos: Position3D, attacker: Piece, di
       x += dx; y += dy; z += dz;
       if (x === kingPos.x && y === kingPos.y && z === kingPos.z) return true;
       if (x < 0 || x > 7 || y < 0 || y > 7 || z < 0 || z > 7) break;
-      if (board.getPieceAt({ x, y, z })) break;
+      if (board.getPieceAtXYZ(x, y, z)) break;
     }
   }
   return false;
@@ -174,7 +239,7 @@ function pawnAttacksKing(kingPos: Position3D, attacker: Piece): boolean {
   const dx = Math.abs(ax - kingPos.x);
   const dz = Math.abs(az - kingPos.z);
   
-  return dx <= 1 && dz <= 1 && !(dx === 0 && dz === 0) && (dx === 1 || dz !== 0);
+  return dx === 1 && dz <= 1;
 }
 
 export function isKingInCheck(board: Board, color: PieceColor): boolean {
@@ -279,18 +344,31 @@ export function getCheckPath(board: Board, color: PieceColor): Position3D[] {
   return path;
 }
 
-export function isCheckmate(board: Board, color: PieceColor): boolean {
-  if (!isKingInCheck(board, color)) return false;
+function hasAnyLegalMove(board: Board, piece: Piece): boolean {
+  const candidates = getValidMoves(board, piece);
+  for (const to of candidates) {
+    const applied = board.applyMove(piece, to);
+    const inCheck = isKingInCheck(board, piece.color);
+    board.unapplyMove(applied);
+    if (!inCheck) return true;
+  }
+  return false;
+}
+
+export function isCheckmate(board: Board, color: PieceColor, inCheck?: boolean): boolean {
+  if (inCheck === undefined) inCheck = isKingInCheck(board, color);
+  if (!inCheck) return false;
   for (const p of board.getPiecesOfColor(color)) {
-    if (getLegalMoves(board, p).length > 0) return false;
+    if (hasAnyLegalMove(board, p)) return false;
   }
   return true;
 }
 
-export function isStalemate(board: Board, color: PieceColor): boolean {
-  if (isKingInCheck(board, color)) return false;
+export function isStalemate(board: Board, color: PieceColor, inCheck?: boolean): boolean {
+  if (inCheck === undefined) inCheck = isKingInCheck(board, color);
+  if (inCheck) return false;
   for (const p of board.getPiecesOfColor(color)) {
-    if (getLegalMoves(board, p).length > 0) return false;
+    if (hasAnyLegalMove(board, p)) return false;
   }
   return true;
 }

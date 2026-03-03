@@ -7,6 +7,7 @@ import { Piece, Position3D, posKey } from './types';
 import { getPiecePaths } from './movement';
 
 const DRAG_THRESHOLD = 5;
+const PICK_DEPTH_EPSILON = 0.001;
 
 export type CellClickCallback = (pos: Position3D) => void;
 
@@ -23,11 +24,16 @@ export class Interaction {
   private board: Board | null = null;
   private pieceView: PieceView | null = null;
   private highlightedKeys = new Set<number>();
+  private highlightedMeshes: THREE.Object3D[] = [];
+  private lastHoverKey: number | null = null;
   private pathPreviewActive = false;
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
   private longPressPiece: Piece | null = null;
   private selectedKey: number | null = null;
   private ac = new AbortController();
+  private hoverRafPending = false;
+  private pendingHoverX = 0;
+  private pendingHoverY = 0;
 
   constructor(
     private renderer: Renderer,
@@ -39,6 +45,8 @@ export class Interaction {
     canvas.addEventListener('pointermove', (e) => this.onPointerMove(e), { signal });
     canvas.addEventListener('pointerup', (e) => this.onPointerUp(e), { signal });
     canvas.addEventListener('pointerleave', () => {
+      this.hoverRafPending = false;
+      this.lastHoverKey = null;
       this.boardView.clearHover();
       this.pieceView?.setHovered(null);
       this.onHover?.(null);
@@ -81,6 +89,11 @@ export class Interaction {
 
   setHighlightedCells(keys: Set<number>): void {
     this.highlightedKeys = keys;
+    this.highlightedMeshes = [];
+    for (const key of keys) {
+      const mesh = this.boardView.getCellMeshByKey(key);
+      if (mesh) this.highlightedMeshes.push(mesh);
+    }
   }
 
   private setRayFromClient(clientX: number, clientY: number): void {
@@ -140,8 +153,14 @@ export class Interaction {
     }
 
     if (this.isDragging) return;
-
-    this.updateHover(e.clientX, e.clientY);
+    this.pendingHoverX = e.clientX;
+    this.pendingHoverY = e.clientY;
+    if (this.hoverRafPending) return;
+    this.hoverRafPending = true;
+    window.requestAnimationFrame(() => {
+      this.hoverRafPending = false;
+      this.updateHover(this.pendingHoverX, this.pendingHoverY);
+    });
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -171,9 +190,17 @@ export class Interaction {
   }
 
   private updateHover(clientX: number, clientY: number): void {
-    const pos = this.raycastClosestHighlighted(clientX, clientY);
+    const highlightedHit = this.raycastClosestHighlighted(clientX, clientY);
+    const pos = highlightedHit?.pos ?? null;
     let canInteractWithPiece = false;
-    const piece = this.raycastPiece(clientX, clientY);
+    const pieceHit = this.raycastPieceHit(clientX, clientY);
+    const pieceInFront = Boolean(
+      pieceHit
+      && (!highlightedHit || pieceHit.distance <= highlightedHit.distance + PICK_DEPTH_EPSILON),
+    );
+    const piece = pieceInFront
+      ? pieceHit!.piece
+      : (highlightedHit ? null : this.raycastPieceByCell(clientX, clientY));
     if (piece && (!this.canHoverPiece || this.canHoverPiece(piece))) {
       this.pieceView?.setHovered(piece);
       canInteractWithPiece = true;
@@ -184,76 +211,128 @@ export class Interaction {
     this.renderer.webgl.domElement.style.cursor = canInteractWithPiece ? 'pointer' : 'default';
 
     if (pos) {
-      this.boardView.hoverCell(pos);
-    } else {
+      const key = posKey(pos);
+      if (this.lastHoverKey !== key) {
+        this.lastHoverKey = key;
+        this.boardView.hoverCell(pos);
+        this.onHover?.(pos);
+      }
+    } else if (this.lastHoverKey !== null) {
+      this.lastHoverKey = null;
       this.boardView.clearHover();
+      this.onHover?.(null);
     }
-    this.onHover?.(pos);
   }
 
-  private raycastClosestHighlighted(clientX: number, clientY: number): Position3D | null {
-    if (this.highlightedKeys.size === 0) return null;
+  private raycastPieceByCell(clientX: number, clientY: number): Piece | null {
+    if (!this.board) return null;
+    this.setRayFromClient(clientX, clientY);
+    const cellMeshes = this.boardView.getAllCellMeshes();
+    const hits = this.raycaster.intersectObjects(cellMeshes, false);
+    if (hits.length === 0) return null;
+    for (const hit of hits) {
+      const cellPos = hit.object.userData.cellPos as Position3D | undefined;
+      if (!cellPos) continue;
+      const piece = this.board.getPieceAt(cellPos);
+      if (piece) return piece;
+    }
+    return null;
+  }
+
+  private raycastClosestHighlighted(clientX: number, clientY: number): { pos: Position3D; distance: number } | null {
+    if (this.highlightedMeshes.length === 0) return null;
 
     this.setRayFromClient(clientX, clientY);
 
-    const meshes = this.boardView.getAllCellMeshes();
-    const intersects = this.raycaster.intersectObjects(meshes, false);
+    const intersects = this.raycaster.intersectObjects(this.highlightedMeshes, false);
 
     for (const hit of intersects) {
       const cellPos = hit.object.userData.cellPos as Position3D | undefined;
       if (cellPos && this.highlightedKeys.has(posKey(cellPos))) {
-        return cellPos;
+        return { pos: cellPos, distance: hit.distance };
       }
     }
     return null;
   }
 
+  private raycastPieceHit(clientX: number, clientY: number): { piece: Piece; distance: number } | null {
+    if (!this.pieceView) return null;
+    this.setRayFromClient(clientX, clientY);
+    const targets = this.pieceView.getPieceHitTargets();
+    const hits = this.raycaster.intersectObjects(targets, false);
+    if (hits.length === 0) return null;
+    const piece = (hits[0].object.userData as Record<string, unknown>)?.piece as Piece | undefined;
+    if (!piece) return null;
+    return { piece, distance: hits[0].distance };
+  }
+
   private raycastBestCell(clientX: number, clientY: number): Position3D | null {
     this.setRayFromClient(clientX, clientY);
-
-    const cellMeshes = this.boardView.getAllCellMeshes();
-    const cellIntersects = this.raycaster.intersectObjects(cellMeshes, false);
-
-    const hitCells: Position3D[] = [];
     let closestHighlighted: { pos: Position3D; distance: number } | null = null;
-    for (const hit of cellIntersects) {
-      const cellPos = hit.object.userData.cellPos as Position3D | undefined;
-      if (!cellPos) continue;
-      hitCells.push(cellPos);
-      if (this.highlightedKeys.has(posKey(cellPos)) && !closestHighlighted) {
+    if (this.highlightedMeshes.length > 0) {
+      const highlightedIntersects = this.raycaster.intersectObjects(this.highlightedMeshes, false);
+      for (const hit of highlightedIntersects) {
+        const cellPos = hit.object.userData.cellPos as Position3D | undefined;
+        if (!cellPos) continue;
         closestHighlighted = { pos: cellPos, distance: hit.distance };
+        break;
       }
     }
 
-    let closestPiece: { pos: Position3D; distance: number } | null = null;
+    let closestPiece: { piece: Piece; pos: Position3D; distance: number } | null = null;
     if (this.pieceView) {
-      const groups = this.pieceView.getAllPieceGroups();
-      const pieceHits = this.raycaster.intersectObjects(groups, true);
+      const targets = this.pieceView.getPieceHitTargets();
+      const pieceHits = this.raycaster.intersectObjects(targets, false);
       for (const hit of pieceHits) {
-        let obj: THREE.Object3D | null = hit.object;
-        while (obj && !(obj.userData as Record<string, unknown>)?.piece) {
-          obj = obj.parent;
-        }
-        if (obj) {
-          closestPiece = { pos: (obj.userData.piece as Piece).position, distance: hit.distance };
-          break;
-        }
+        const piece = (hit.object.userData as Record<string, unknown>)?.piece as Piece | undefined;
+        if (!piece) continue;
+        closestPiece = { piece, pos: piece.position, distance: hit.distance };
+        break;
       }
+    }
+
+    // If a selectable piece was explicitly clicked while another piece is selected,
+    // switch selection instead of forcing the old piece to move.
+    const pieceInFront = Boolean(
+      closestPiece
+      && (!closestHighlighted || closestPiece.distance <= closestHighlighted.distance + PICK_DEPTH_EPSILON),
+    );
+    const canSelectClickedPiece = Boolean(
+      closestPiece
+      && pieceInFront
+      && this.canHoverPiece
+      && this.canHoverPiece(closestPiece.piece),
+    );
+    if (canSelectClickedPiece) {
+      return closestPiece!.pos;
+    }
+
+    // When move targets are highlighted, destination picking should win over
+    // non-selectable piece hits so clicks register through visual overlays.
+    if (this.highlightedKeys.size > 0 && closestHighlighted) {
+      return closestHighlighted.pos;
     }
 
     // Clicking the selected piece should always return its position so the
     // game layer can deselect, even if highlighted cells on other layers are
     // in the ray's path.
-    if (closestPiece && this.selectedKey && posKey(closestPiece.pos) === this.selectedKey) {
+    if (closestPiece && pieceInFront && this.selectedKey && posKey(closestPiece.pos) === this.selectedKey) {
       return closestPiece.pos;
     }
 
-    // Prioritize piece clicks over highlighted-cell clicks. In stacked 3D layers,
-    // users often target a visible piece while highlighted cells from a previously
-    // selected piece lie along the same ray path.
+    // When no move targets are active, prefer piece picking.
     if (closestPiece) return closestPiece.pos;
 
     if (closestHighlighted) return closestHighlighted.pos;
+
+    const cellMeshes = this.boardView.getAllCellMeshes();
+    const cellIntersects = this.raycaster.intersectObjects(cellMeshes, false);
+    const hitCells: Position3D[] = [];
+    for (const hit of cellIntersects) {
+      const cellPos = hit.object.userData.cellPos as Position3D | undefined;
+      if (!cellPos) continue;
+      hitCells.push(cellPos);
+    }
 
     if (this.board) {
       for (const pos of hitCells) {
@@ -270,15 +349,11 @@ export class Interaction {
 
     this.setRayFromClient(clientX, clientY);
 
-    const groups = this.pieceView.getAllPieceGroups();
-    const hits = this.raycaster.intersectObjects(groups, true);
+    const targets = this.pieceView.getPieceHitTargets();
+    const hits = this.raycaster.intersectObjects(targets, false);
     if (hits.length === 0) return null;
-
-    let obj: THREE.Object3D | null = hits[0].object;
-    while (obj && !(obj.userData as Record<string, unknown>)?.piece) {
-      obj = obj.parent;
-    }
-    return obj ? (obj.userData.piece as Piece) : null;
+    const piece = (hits[0].object.userData as Record<string, unknown>)?.piece as Piece | undefined;
+    return piece ?? null;
   }
 
   private beginPathPreview(clientX: number, clientY: number): void {

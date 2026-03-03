@@ -19,9 +19,45 @@ const CUSTOM_MODEL_Y_OFFSET_BY_TYPE: Partial<Record<PieceType, number>> = {
 export class PieceView {
   group: THREE.Group;
   private meshes = new Map<Piece, THREE.Group>();
+  private meshListCache: THREE.Group[] = [];
+  private meshListDirty = true;
+  private hitTargetListCache: THREE.Object3D[] = [];
+  private hitTargetListDirty = true;
   private hoveredPiece: Piece | null = null;
   private selectedPiece: Piece | null = null;
   private _styledPieces = new Map<Piece, 'hover' | 'selected'>();
+
+  private sharedWhiteMaterial = new THREE.MeshPhysicalMaterial({
+    color: WHITE_COLOR,
+    emissive: 0x080806,
+    metalness: 0.04,
+    roughness: 0.62,
+    clearcoat: 0.25,
+    clearcoatRoughness: 0.35,
+    reflectivity: 0.4,
+    transparent: false,
+    depthWrite: true,
+  });
+
+  private sharedBlackMaterial = new THREE.MeshPhysicalMaterial({
+    color: BLACK_COLOR,
+    emissive: 0x030306,
+    metalness: 0.04,
+    roughness: 0.55,
+    clearcoat: 0.3,
+    clearcoatRoughness: 0.35,
+    reflectivity: 0.4,
+    transparent: false,
+    depthWrite: true,
+  });
+
+  private sharedHitGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+  private sharedHitMaterial = new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    colorWrite: false,
+  });
 
   constructor() {
     this.group = new THREE.Group();
@@ -40,8 +76,11 @@ export class PieceView {
           this.selectedPiece = null;
         }
         this._styledPieces.delete(piece);
+        this.disposePieceStyleMaterials(mesh);
         this.group.remove(mesh);
         this.meshes.delete(piece);
+        this.meshListDirty = true;
+        this.hitTargetListDirty = true;
       }
     }
 
@@ -52,6 +91,8 @@ export class PieceView {
         mesh = this.createPieceMesh(piece);
         this.group.add(mesh);
         this.meshes.set(piece, mesh);
+        this.meshListDirty = true;
+        this.hitTargetListDirty = true;
       }
       const [wx, wy, wz] = boardToWorld(piece.position);
       mesh.position.set(wx, wy, wz);
@@ -61,20 +102,9 @@ export class PieceView {
   private createPieceMesh(piece: Piece): THREE.Group {
     const isWhite = piece.color === PieceColor.White;
     const color = isWhite ? WHITE_COLOR : BLACK_COLOR;
-    const emissive = isWhite ? 0x080806 : 0x030306;
     const group = new THREE.Group();
 
-    const mat = new THREE.MeshPhysicalMaterial({
-      color,
-      emissive,
-      metalness: 0.04,
-      roughness: isWhite ? 0.62 : 0.55,
-      clearcoat: isWhite ? 0.25 : 0.3,
-      clearcoatRoughness: 0.35,
-      reflectivity: 0.4,
-      transparent: false,
-      depthWrite: true,
-    });
+    const mat = isWhite ? this.sharedWhiteMaterial : this.sharedBlackMaterial;
 
     const addPart = (
       geo: THREE.BufferGeometry,
@@ -208,6 +238,8 @@ export class PieceView {
 
     group.renderOrder = 5;
     group.userData = { piece, key: posKey(piece.position) };
+    this.prepareStyleMaterials(group, piece.color);
+    this.addHitTarget(group, piece);
 
     return group;
   }
@@ -215,14 +247,19 @@ export class PieceView {
   rebuildPiece(piece: Piece): void {
     const old = this.meshes.get(piece);
     if (old) {
+      this.disposePieceStyleMaterials(old);
       this.group.remove(old);
       this.meshes.delete(piece);
+      this.meshListDirty = true;
+      this.hitTargetListDirty = true;
     }
     const mesh = this.createPieceMesh(piece);
     const [wx, wy, wz] = boardToWorld(piece.position);
     mesh.position.set(wx, wy, wz);
     this.group.add(mesh);
     this.meshes.set(piece, mesh);
+    this.meshListDirty = true;
+    this.hitTargetListDirty = true;
     this.updateHighlightState();
   }
 
@@ -231,7 +268,23 @@ export class PieceView {
   }
 
   getAllPieceGroups(): THREE.Group[] {
-    return Array.from(this.meshes.values());
+    if (this.meshListDirty) {
+      this.meshListCache = Array.from(this.meshes.values());
+      this.meshListDirty = false;
+    }
+    return this.meshListCache;
+  }
+
+  getPieceHitTargets(): THREE.Object3D[] {
+    if (this.hitTargetListDirty) {
+      this.hitTargetListCache = [];
+      for (const group of this.meshes.values()) {
+        const target = group.userData.hitTarget as THREE.Object3D | undefined;
+        if (target) this.hitTargetListCache.push(target);
+      }
+      this.hitTargetListDirty = false;
+    }
+    return this.hitTargetListCache;
   }
 
   setHovered(piece: Piece | null): void {
@@ -253,28 +306,62 @@ export class PieceView {
     const group = this.meshes.get(piece);
     if (!group) return;
 
-    const isWhite = piece.color === PieceColor.White;
-    let emissiveColor: number;
-
-    switch (style) {
-      case 'hover':
-        emissiveColor = 0xdddd88; // Light yellow-white
-        break;
-      case 'selected':
-        emissiveColor = 0xeebb44; // Warm yellow
-        break;
-      default:
-        emissiveColor = isWhite ? 0x080806 : 0x030306;
-        break;
-    }
-
     group.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        const mat = child.material as THREE.MeshPhysicalMaterial;
-        if (mat && mat.emissive) {
-          mat.emissive.setHex(emissiveColor);
+        if (child.userData.isHitTarget) return;
+        if (style === 'base') {
+          child.material = child.userData.originalMat as THREE.Material;
+        } else {
+          const styleKey = style === 'hover' ? 'hoverMat' : 'selectedMat';
+          child.material = child.userData[styleKey] as THREE.Material;
         }
       }
+    });
+  }
+
+  private prepareStyleMaterials(group: THREE.Group, color: PieceColor): void {
+    const baseEmissive = color === PieceColor.White ? 0x080806 : 0x030306;
+    const hoverEmissive = 0xdddd88;
+    const selectedEmissive = 0xeebb44;
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.isHitTarget) return;
+      const original = child.material as THREE.Material;
+      child.userData.originalMat = original;
+      const hoverMat = original.clone() as THREE.MeshPhysicalMaterial;
+      if (hoverMat.emissive) hoverMat.emissive.setHex(hoverEmissive);
+      const selectedMat = original.clone() as THREE.MeshPhysicalMaterial;
+      if (selectedMat.emissive) selectedMat.emissive.setHex(selectedEmissive);
+      const originalPhysical = original as THREE.MeshPhysicalMaterial;
+      if (originalPhysical.emissive) originalPhysical.emissive.setHex(baseEmissive);
+      child.userData.hoverMat = hoverMat;
+      child.userData.selectedMat = selectedMat;
+    });
+  }
+
+  private addHitTarget(group: THREE.Group, piece: Piece): void {
+    const hit = new THREE.Mesh(this.sharedHitGeometry, this.sharedHitMaterial);
+    hit.userData.isHitTarget = true;
+    hit.userData.piece = piece;
+    hit.renderOrder = -1;
+    // Slightly lifted and enlarged to make hover/click targeting forgiving.
+    hit.position.y = 0.1;
+    hit.scale.set(0.95, 1.2, 0.95);
+    group.add(hit);
+    group.userData.hitTarget = hit;
+  }
+
+  private disposePieceStyleMaterials(group: THREE.Group): void {
+    group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData.isHitTarget) return;
+      const hoverMat = child.userData.hoverMat as THREE.Material | undefined;
+      const selectedMat = child.userData.selectedMat as THREE.Material | undefined;
+      if (hoverMat) hoverMat.dispose();
+      if (selectedMat) selectedMat.dispose();
+      delete child.userData.hoverMat;
+      delete child.userData.selectedMat;
+      delete child.userData.originalMat;
     });
   }
 

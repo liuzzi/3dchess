@@ -39,6 +39,10 @@ export function posKey(p: Position3D): number {
   return (p.x & 7) | ((p.y & 7) << 3) | ((p.z & 7) << 6);
 }
 
+export function posKeyXYZ(x: number, y: number, z: number): number {
+  return (x & 7) | ((y & 7) << 3) | ((z & 7) << 6);
+}
+
 /**
  * Convert board coordinates to Three.js render coordinates.
  * Board y (row, the direction armies face) → 3D z (depth / front-back)
