@@ -878,7 +878,6 @@ function searchAtDepth(
   board: Board,
   color: PieceColor,
   depth: number,
-  noiseAmplitude: number,
   rootMoves: MoveCandidate[] | null,
   rootAlpha = -Infinity,
   rootBeta = Infinity,
@@ -908,8 +907,7 @@ function searchAtDepth(
       board.unapplyMove(applied);
     }
 
-    const score = noiseAmplitude > 0 ? rawScore + (Math.random() - 0.5) * noiseAmplitude : rawScore;
-    scored.push({ fromPos: move.piece.position, to: move.to, score, rawScore });
+    scored.push({ fromPos: move.piece.position, to: move.to, score: rawScore, rawScore });
     onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: rawScore });
     if (rawScore > alpha) alpha = rawScore;
     if (alpha >= rootBeta) break;
@@ -1003,7 +1001,6 @@ function buildTimeBudget(board: Board, color: PieceColor, difficulty: Difficulty
 function guaranteedDepthOne(
   board: Board,
   color: PieceColor,
-  noiseAmplitude: number,
   rootMoves: MoveCandidate[] | null,
 ): ScoredMove[] {
   const prevDeadline = searchDeadline;
@@ -1015,7 +1012,7 @@ function guaranteedDepthOne(
   nodesSearched = 0;
 
   try {
-    return searchAtDepth(board, color, 1, noiseAmplitude, rootMoves, -Infinity, Infinity);
+    return searchAtDepth(board, color, 1, rootMoves, -Infinity, Infinity);
   } finally {
     searchDeadline = prevDeadline;
     nodeLimit = prevNodeLimit;
@@ -1041,6 +1038,13 @@ function resolveRootMoves(
   return selected;
 }
 
+function selectWithNoise(moves: ScoredMove[], noiseAmplitude: number): ScoredMove {
+  if (noiseAmplitude === 0 || moves.length <= 1) return moves[0];
+  const bestRaw = moves[0].rawScore;
+  const candidates = moves.filter(m => bestRaw - m.rawScore <= noiseAmplitude);
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 function iterativeSearch(
   board: Board,
   color: PieceColor,
@@ -1049,7 +1053,6 @@ function iterativeSearch(
   progressMode: ProgressMode = 'depth',
   onProgress?: (kind: 'depth' | 'rootMove', result: DepthResult) => void,
 ): { best: ScoredMove; completedDepth: number; depthResults: DepthResult[] } {
-  const noiseAmplitude = NOISE_AMPLITUDE[difficulty];
   const maxDepth = MAX_DEPTH[difficulty];
   const budget = buildTimeBudget(board, color, difficulty);
   const restrictedRootMoves = resolveRootMoves(board, color, rootMoves);
@@ -1101,7 +1104,6 @@ function iterativeSearch(
             board,
             color,
             depth,
-            noiseAmplitude,
             restrictedRootMoves,
             alpha,
             beta,
@@ -1116,7 +1118,6 @@ function iterativeSearch(
               board,
               color,
               depth,
-              noiseAmplitude,
               restrictedRootMoves,
               -Infinity,
               Infinity,
@@ -1131,7 +1132,6 @@ function iterativeSearch(
           board,
           color,
           depth,
-          noiseAmplitude,
           restrictedRootMoves,
           -Infinity,
           Infinity,
@@ -1178,7 +1178,7 @@ function iterativeSearch(
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (!bestResult) {
-          bestResult = guaranteedDepthOne(board, color, noiseAmplitude, restrictedRootMoves);
+          bestResult = guaranteedDepthOne(board, color, restrictedRootMoves);
           completedDepth = 1;
           const depthResult: DepthResult = {
             depth: 1,
@@ -1203,7 +1203,8 @@ function iterativeSearch(
     throw new Error('Bot has no legal moves');
   }
 
-  return { best: bestResult[0], completedDepth, depthResults };
+  const best = selectWithNoise(bestResult, NOISE_AMPLITUDE[difficulty]);
+  return { best, completedDepth, depthResults };
 }
 
 export interface WorkerRequest {
