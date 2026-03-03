@@ -14,7 +14,7 @@ interface SubOption {
 export interface MenuControllerActions {
   startLocal: (setup: SetupMode) => void;
   startBot: (difficulty: Difficulty, setup: SetupMode) => void;
-  startOnlineHost: (localColor: PieceColor, setup: SetupMode) => void;
+  goOnline: () => void;
 }
 
 export interface MenuControllerHandle {
@@ -146,10 +146,7 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
             { label: 'Medium', detail: 'Balanced', toneClass: 'tone-mid', onSelect: () => actions.startBot('medium', selectedSetup) },
             { label: 'Hard', detail: 'No Mercy', toneClass: 'tone-hard', onSelect: () => actions.startBot('hard', selectedSetup) },
           ]
-        : [
-            { label: 'Play White', detail: 'First Move', toneClass: 'tone-white', onSelect: () => actions.startOnlineHost(PieceColor.White, selectedSetup) },
-            { label: 'Play Black', detail: 'Counterplay', toneClass: 'tone-black', onSelect: () => actions.startOnlineHost(PieceColor.Black, selectedSetup) },
-          ];
+        : [];
 
     subCubeStack.replaceChildren();
     options.forEach((option, index) => {
@@ -189,6 +186,12 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
       const modeType = cube.dataset.mode as MainMode | undefined;
       if (!modeType || transitioning) return;
       playMenuClick();
+
+      if (modeType === 'online') {
+        playMenuConfirm();
+        actions.goOnline();
+        return;
+      }
 
       if (expandedMode === modeType) {
         collapseExpanded();

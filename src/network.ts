@@ -26,6 +26,8 @@ export interface HelloMessage {
   protocolVersion: number;
   hostColor: PieceColor;
   setup: SetupMode;
+  roomId?: string;
+  inviteCode?: string;
 }
 
 export interface ReadyMessage {
@@ -267,6 +269,7 @@ export class Network {
     this.wiredConn = conn;
 
     conn.on('data', (data) => {
+      if (this.conn !== conn) return;
       const msg = data as NetMessage;
       const waiterIndex = this.pendingWaiters.findIndex((waiter) => waiter.predicate(msg));
       if (waiterIndex !== -1) {
@@ -278,17 +281,18 @@ export class Network {
       if (this.messageHandler) {
         this.messageHandler(msg);
       } else {
-        // Messages can arrive before game wiring completes; queue them.
         this.queuedMessages.push(msg);
       }
     });
 
     conn.on('close', () => {
+      if (this.conn !== conn) return;
       this.rejectAllPendingWaiters(new Error('Connection closed'));
       if (this.disconnectHandler) this.disconnectHandler();
     });
 
     conn.on('error', () => {
+      if (this.conn !== conn) return;
       this.rejectAllPendingWaiters(new Error('Connection errored'));
       if (this.disconnectHandler) this.disconnectHandler();
     });
@@ -349,12 +353,13 @@ export class Network {
     this.send({ type: 'start' });
   }
 
-  sendHello(hostColor: PieceColor, setup: SetupMode): void {
+  sendHello(hostColor: PieceColor, setup: SetupMode, meta?: { roomId?: string; inviteCode?: string }): void {
     this.send({
       type: 'hello',
       protocolVersion: PROTOCOL_VERSION,
       hostColor,
       setup,
+      ...(meta ?? {}),
     });
   }
 

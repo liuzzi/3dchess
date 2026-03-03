@@ -47,7 +47,7 @@
           <div class="cube">
             <div class="cube-face front">
               <span class="cube-title">Online</span>
-              <span class="cube-desc">Invite Link</span>
+              <span class="cube-desc">Multiplayer</span>
             </div>
             <div class="cube-face back"></div>
             <div class="cube-face left"></div>
@@ -64,14 +64,90 @@
     </div>
   </div>
   <div id="online-lobby" style="display:none;">
+    <div id="lobby-bg" aria-hidden="true">
+      <div class="lobby-bg-layer lobby-bg-layer-1"></div>
+      <div class="lobby-bg-layer lobby-bg-layer-2"></div>
+      <div class="lobby-bg-layer lobby-bg-layer-3"></div>
+    </div>
     <div id="lobby-inner">
-      <div id="lobby-title">Waiting for opponent...</div>
-      <div id="lobby-link-row">
-        <input id="lobby-link" readonly />
-        <button id="lobby-copy-btn">Copy</button>
+
+      <div id="lobby-browse">
+        <h2 id="lobby-heading">Online Games</h2>
+        <div id="room-table-wrap">
+          <table id="room-table">
+            <thead>
+              <tr><th>Mode</th><th>You Play</th><th></th></tr>
+            </thead>
+            <tbody id="room-table-body"></tbody>
+          </table>
+          <div id="room-table-empty">No games available &mdash; create one to get started!</div>
+        </div>
+        <div id="lobby-action-row">
+          <button id="lobby-create-btn" type="button">Create Game</button>
+          <button id="lobby-quick-btn" type="button">Quick Play</button>
+        </div>
+        <div id="room-code-section">
+          <span class="room-code-label">Have an invite code?</span>
+          <div id="room-code-row">
+            <input id="room-code-input" placeholder="Enter code" maxlength="6" />
+            <button id="room-code-join-btn" type="button">Join</button>
+          </div>
+        </div>
+        <button id="lobby-browse-back" type="button" class="lobby-secondary-btn">Back</button>
       </div>
-      <div id="lobby-status">Share this link with your opponent</div>
-      <button id="lobby-back-btn" type="button">Back</button>
+
+      <div id="lobby-create" style="display:none;">
+        <h2 class="lobby-view-title">Create Game</h2>
+        <div class="create-field">
+          <label for="create-mode-select">Game Mode</label>
+          <select id="create-mode-select">
+            <option value="classic">Classic</option>
+            <option value="barricade">Barricade</option>
+            <option value="pawnWall">Pawn Wall</option>
+          </select>
+        </div>
+        <div class="create-field">
+          <label>Your Color</label>
+          <div id="create-color-buttons">
+            <button class="create-toggle-btn selected" data-color="white" type="button">&#9812; White</button>
+            <button class="create-toggle-btn" data-color="black" type="button">&#9818; Black</button>
+          </div>
+        </div>
+        <div class="create-field">
+          <label>Visibility</label>
+          <div id="create-vis-buttons">
+            <button class="create-toggle-btn selected" data-vis="public" type="button">Public</button>
+            <button class="create-toggle-btn" data-vis="private" type="button">Private</button>
+          </div>
+        </div>
+        <button id="create-start-btn" type="button" class="lobby-primary-btn">Start</button>
+        <button id="create-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+
+      <div id="lobby-quick" style="display:none;">
+        <h2 class="lobby-view-title">Quick Play</h2>
+        <div class="create-field">
+          <label for="quick-mode-select">Game Mode</label>
+          <select id="quick-mode-select">
+            <option value="classic">Classic</option>
+            <option value="barricade">Barricade</option>
+            <option value="pawnWall">Pawn Wall</option>
+          </select>
+        </div>
+        <button id="quick-start-btn" type="button" class="lobby-primary-btn">Find Match</button>
+        <button id="quick-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+
+      <div id="lobby-waiting" style="display:none;">
+        <div id="lobby-title">Waiting for opponent...</div>
+        <div id="lobby-link-row">
+          <input id="lobby-link" readonly />
+          <button id="lobby-copy-btn">Copy</button>
+        </div>
+        <div id="lobby-status"></div>
+        <button id="lobby-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+
     </div>
   </div>
   <div id="game-frame" class="game-hidden">

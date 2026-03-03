@@ -33,7 +33,7 @@ export class BoardView {
   private thinkingFlashTimers: Map<number, number> = new Map();
 
   private baseStyles: Map<number, CellBase> = new Map();
-  private frostingLevel: number = 0.06;
+  private frostingLevel: number = 0.035;
   private outlineBrightness: number = 0.3;
 
   constructor() {
@@ -70,12 +70,12 @@ export class BoardView {
             ? tmp.copy(edgeLightBottom).lerp(edgeLightTop, t).getHex()
             : tmp.copy(edgeDarkBottom).lerp(edgeDarkTop, t).getHex();
 
-          this.baseStyles.set(key, { color: cellColor, opacity: 0.06, edgeColor });
+          this.baseStyles.set(key, { color: cellColor, opacity: 0.035, edgeColor });
 
           const mat = new THREE.MeshBasicMaterial({
             color: cellColor,
             transparent: true,
-            opacity: 0.06,
+            opacity: 0.035,
             depthWrite: false,
             side: THREE.DoubleSide,
           });

@@ -25,6 +25,7 @@ export class Renderer {
     this.webgl.setSize(window.innerWidth, window.innerHeight);
     this.webgl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.webgl.sortObjects = true;
+    this.webgl.outputColorSpace = THREE.SRGBColorSpace;
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.target.set(3.5, 3.5, 3.5);
@@ -80,16 +81,25 @@ export class Renderer {
       canvas.addEventListener(t, stripCtrl as EventListener, { capture: true })
     );
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    // Lighting rig for readable surface detail on monochrome pieces.
+    const ambient = new THREE.AmbientLight(0xffffff, 0.42);
     this.scene.add(ambient);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(10, 15, 10);
-    this.scene.add(dirLight);
+    const hemi = new THREE.HemisphereLight(0xdde6ff, 0x1e1c24, 0.38);
+    hemi.position.set(0, 20, 0);
+    this.scene.add(hemi);
 
-    const dirLight2 = new THREE.DirectionalLight(0x8888ff, 0.3);
-    dirLight2.position.set(-10, -5, -10);
-    this.scene.add(dirLight2);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    keyLight.position.set(12, 18, 10);
+    this.scene.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xb9c8ff, 0.5);
+    fillLight.position.set(-10, 7, -8);
+    this.scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.45);
+    rimLight.position.set(0, 10, -16);
+    this.scene.add(rimLight);
 
     this.addAxisLabels();
 

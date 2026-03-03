@@ -32,14 +32,20 @@ const EG_VALUE: Record<PieceType, number> = {
 
 const TIME_LIMIT: Record<Difficulty, number> = {
   easy: 800,
-  medium: 3500,
-  hard: 9000,
+  medium: 1800,
+  hard: 7500,
 };
 
 const MAX_DEPTH: Record<Difficulty, number> = {
   easy: 2,
-  medium: 7,
-  hard: 11,
+  medium: 4,
+  hard: 9,
+};
+
+const NOISE_AMPLITUDE: Record<Difficulty, number> = {
+  easy: 120,
+  medium: 40,
+  hard: 0,
 };
 
 class SearchAborted extends Error {}
@@ -872,7 +878,7 @@ function searchAtDepth(
   board: Board,
   color: PieceColor,
   depth: number,
-  noisy: boolean,
+  noiseAmplitude: number,
   rootMoves: MoveCandidate[] | null,
   rootAlpha = -Infinity,
   rootBeta = Infinity,
@@ -902,7 +908,7 @@ function searchAtDepth(
       board.unapplyMove(applied);
     }
 
-    const score = noisy ? rawScore + (Math.random() - 0.5) * 120 : rawScore;
+    const score = noiseAmplitude > 0 ? rawScore + (Math.random() - 0.5) * noiseAmplitude : rawScore;
     scored.push({ fromPos: move.piece.position, to: move.to, score, rawScore });
     onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: rawScore });
     if (rawScore > alpha) alpha = rawScore;
@@ -997,7 +1003,7 @@ function buildTimeBudget(board: Board, color: PieceColor, difficulty: Difficulty
 function guaranteedDepthOne(
   board: Board,
   color: PieceColor,
-  noisy: boolean,
+  noiseAmplitude: number,
   rootMoves: MoveCandidate[] | null,
 ): ScoredMove[] {
   const prevDeadline = searchDeadline;
@@ -1009,7 +1015,7 @@ function guaranteedDepthOne(
   nodesSearched = 0;
 
   try {
-    return searchAtDepth(board, color, 1, noisy, rootMoves, -Infinity, Infinity);
+    return searchAtDepth(board, color, 1, noiseAmplitude, rootMoves, -Infinity, Infinity);
   } finally {
     searchDeadline = prevDeadline;
     nodeLimit = prevNodeLimit;
@@ -1043,7 +1049,7 @@ function iterativeSearch(
   progressMode: ProgressMode = 'depth',
   onProgress?: (kind: 'depth' | 'rootMove', result: DepthResult) => void,
 ): { best: ScoredMove; completedDepth: number; depthResults: DepthResult[] } {
-  const noisy = difficulty === 'easy';
+  const noiseAmplitude = NOISE_AMPLITUDE[difficulty];
   const maxDepth = MAX_DEPTH[difficulty];
   const budget = buildTimeBudget(board, color, difficulty);
   const restrictedRootMoves = resolveRootMoves(board, color, rootMoves);
@@ -1095,7 +1101,7 @@ function iterativeSearch(
             board,
             color,
             depth,
-            noisy,
+            noiseAmplitude,
             restrictedRootMoves,
             alpha,
             beta,
@@ -1110,7 +1116,7 @@ function iterativeSearch(
               board,
               color,
               depth,
-              noisy,
+              noiseAmplitude,
               restrictedRootMoves,
               -Infinity,
               Infinity,
@@ -1125,7 +1131,7 @@ function iterativeSearch(
           board,
           color,
           depth,
-          noisy,
+          noiseAmplitude,
           restrictedRootMoves,
           -Infinity,
           Infinity,
@@ -1172,7 +1178,7 @@ function iterativeSearch(
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (!bestResult) {
-          bestResult = guaranteedDepthOne(board, color, noisy, restrictedRootMoves);
+          bestResult = guaranteedDepthOne(board, color, noiseAmplitude, restrictedRootMoves);
           completedDepth = 1;
           const depthResult: DepthResult = {
             depth: 1,

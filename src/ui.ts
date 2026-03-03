@@ -52,6 +52,8 @@ export class UI {
   private moveOptionButtons = new Map<number, HTMLButtonElement>();
   private hoveredMoveKey: number | null = null;
   private ac = new AbortController();
+  private titleFlashTimer: ReturnType<typeof setInterval> | null = null;
+  private originalTitle = document.title;
 
   constructor(
     private game: Game,
@@ -102,6 +104,13 @@ export class UI {
       this.undoBtn.style.display = '';
     } else {
       this.undoBtn.style.display = 'none';
+    }
+
+    window.addEventListener('focus', () => this.stopTitleFlash(), { signal: this.ac.signal });
+
+    const aiThinkingFxControl = document.getElementById('ai-thinking-fx-control');
+    if (aiThinkingFxControl) {
+      aiThinkingFxControl.style.display = this.game.mode.type === 'bot' ? '' : 'none';
     }
   }
 
@@ -337,6 +346,16 @@ export class UI {
         break;
       case 'turnChange':
         this.updateTurn();
+        if (
+          this.game.mode.type === 'online' &&
+          this.game.mode.localColor &&
+          this.game.currentTurn === this.game.mode.localColor &&
+          !document.hasFocus()
+        ) {
+          this.startTitleFlash();
+        } else {
+          this.stopTitleFlash();
+        }
         break;
       case 'reset':
         this.updateTurn();
@@ -445,7 +464,24 @@ export class UI {
       .join(' ');
   }
 
+  private startTitleFlash(): void {
+    if (this.titleFlashTimer) return;
+    let on = false;
+    this.titleFlashTimer = setInterval(() => {
+      on = !on;
+      document.title = on ? '\u265A Your Turn!' : this.originalTitle;
+    }, 800);
+  }
+
+  private stopTitleFlash(): void {
+    if (!this.titleFlashTimer) return;
+    clearInterval(this.titleFlashTimer);
+    this.titleFlashTimer = null;
+    document.title = this.originalTitle;
+  }
+
   dispose(): void {
+    this.stopTitleFlash();
     this.ac.abort();
   }
 }

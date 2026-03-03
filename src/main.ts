@@ -19,6 +19,10 @@ import {
   computeThreatLinesAfterMove,
 } from './threatPreview';
 import { autoPromoteToQueen } from './promotion';
+import { LobbyClient } from './lobbyClient';
+import type { RoomInfo } from './lobbyTypes';
+
+import { loadModels } from './modelLoader';
 
 let renderer: Renderer;
 let boardView: BoardView;
@@ -28,6 +32,7 @@ let interaction: Interaction;
 let ui: UI;
 let bot: Bot | null = null;
 let network: Network | null = null;
+let lobbyClient: LobbyClient | null = null;
 let menuController: MenuControllerHandle | null = null;
 let menuHideTimeoutId: number | null = null;
 let onlineFlowCancelled = false;
@@ -268,6 +273,86 @@ function buildPvSetsForDisplay(progress: WorkerResponse): { fromPos: Position3D;
   return [buildPvForDisplay(basePv)];
 }
 
+function spawnShatterParticles(capturedPiece: Piece, pos: Position3D): void {
+  if (!shatterParticlesGroup) return;
+
+  const [x, y, z] = boardToWorld(pos);
+  const center = new THREE.Vector3(x, y, z);
+
+  const color = capturedPiece.color === PieceColor.White ? 0xdddddd : 0x222222;
+
+  const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; rotationAxis: THREE.Vector3; rotationSpeed: number }[] = [];
+
+  for (let i = 0; i < 30; i++) {
+    const mat = new THREE.MeshStandardMaterial({
+      color: color,
+      roughness: 0.7,
+      metalness: 0.2,
+    });
+    const size = 0.05 + Math.random() * 0.1;
+    const geo = new THREE.BoxGeometry(size, size, size);
+    const mesh = new THREE.Mesh(geo, mat);
+
+    mesh.position.set(
+      center.x + (Math.random() - 0.5) * 0.5,
+      center.y + (Math.random() - 0.5) * 0.5,
+      center.z + (Math.random() - 0.5) * 0.5
+    );
+
+    const velocity = new THREE.Vector3(
+      (Math.random() - 0.5) * 4,
+      Math.random() * 4 + 2,
+      (Math.random() - 0.5) * 4
+    );
+
+    const rotationAxis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
+    const rotationSpeed = Math.random() * 10;
+
+    particles.push({ mesh, velocity, rotationAxis, rotationSpeed });
+    shatterParticlesGroup.add(mesh);
+  }
+
+  let lastTime = performance.now();
+  const floorY = -1.5;
+
+  const animate = (now: number): void => {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+    let allSettled = true;
+
+    for (const p of particles) {
+      if (p.mesh.position.y > floorY || Math.abs(p.velocity.y) > 0.1 || Math.abs(p.velocity.x) > 0.1 || Math.abs(p.velocity.z) > 0.1) {
+        allSettled = false;
+        p.velocity.y -= 15 * dt;
+
+        p.mesh.position.addScaledVector(p.velocity, dt);
+        p.mesh.rotateOnAxis(p.rotationAxis, p.rotationSpeed * dt);
+
+        if (p.mesh.position.y <= floorY) {
+          p.mesh.position.y = floorY;
+          if (Math.abs(p.velocity.y) > 0.5) {
+            p.velocity.y *= -0.4;
+            p.velocity.x *= 0.6;
+            p.velocity.z *= 0.6;
+            p.rotationSpeed *= 0.6;
+          } else {
+            p.velocity.y = 0;
+            p.velocity.x *= 0.9;
+            p.velocity.z *= 0.9;
+            p.rotationSpeed *= 0.9;
+          }
+        }
+      }
+    }
+
+    if (!allSettled) {
+      window.requestAnimationFrame(animate);
+    }
+  };
+
+  window.requestAnimationFrame(animate);
+}
+
 function spawnImpactBurst(pos: Position3D): void {
   const [x, y, z] = boardToWorld(pos);
   const center = new THREE.Vector3(x, y, z);
@@ -346,7 +431,7 @@ async function animateMoveSteps(
   from: Position3D,
   to: Position3D,
   token: number,
-  captured: boolean,
+  captured: Piece | undefined,
 ): Promise<void> {
   const mesh = pieceView.getMeshForPiece(piece);
   if (!mesh) return;
@@ -393,6 +478,7 @@ async function animateMoveSteps(
     if (captured && i === worldPath.length - 1) {
       playCapture();
       spawnImpactBurst(to);
+      spawnShatterParticles(captured, to);
     }
   }
   boardView.setTraversalCell(null);
@@ -483,11 +569,29 @@ function queueHoverPreview(pos: Position3D | null): void {
   });
 }
 
+let shatterParticlesGroup: THREE.Group | null = null;
+
 function disposeCurrentGame(): void {
   if (renderer) renderer.dispose();
   if (interaction) interaction.dispose();
   if (ui) ui.dispose();
   if (game) game.removeAllListeners();
+  if (shatterParticlesGroup) {
+    clearShatterParticles();
+    shatterParticlesGroup = null;
+  }
+}
+
+function clearShatterParticles(): void {
+  if (!shatterParticlesGroup) return;
+  while (shatterParticlesGroup.children.length > 0) {
+    const child = shatterParticlesGroup.children[0];
+    shatterParticlesGroup.remove(child);
+    if (child instanceof THREE.Mesh) {
+      child.geometry.dispose();
+      if (child.material instanceof THREE.Material) child.material.dispose();
+    }
+  }
 }
 
 function initGame(mode: GameMode): void {
@@ -535,6 +639,9 @@ function initGame(mode: GameMode): void {
 
   interaction.setBoard(game.board);
   interaction.setPieceView(pieceView);
+
+  shatterParticlesGroup = new THREE.Group();
+  renderer.scene.add(shatterParticlesGroup);
 
   renderer.scene.add(boardView.group);
   renderer.scene.add(pieceView.group);
@@ -611,7 +718,7 @@ function initGame(mode: GameMode): void {
           if (token !== moveAnimationToken) return;
           isAnimatingMove = true;
           try {
-            await animateMoveSteps(piece, from, to, token, !!captured);
+            await animateMoveSteps(piece, from, to, token, captured);
             if (token === moveAnimationToken) {
               boardView.setTraversalCell(null);
               pieceView.sync(game.board);
@@ -657,6 +764,7 @@ function initGame(mode: GameMode): void {
         boardView.clearHoverThreatLines();
         interaction.setHighlightedCells(new Set());
         interaction.setBoard(game.board);
+        clearShatterParticles();
         break;
       case 'undo': {
         interruptBotThinking();
@@ -674,6 +782,7 @@ function initGame(mode: GameMode): void {
         interaction.setHighlightedCells(new Set());
         interaction.setSelectedKey(null);
         interaction.setBoard(game.board);
+        clearShatterParticles();
 
         if (lastMove) {
           boardView.highlightLastMove(lastMove.from, lastMove.to);
@@ -822,6 +931,7 @@ function showMenu(): void {
 }
 
 function returnToMenuFromGame(): void {
+  cleanupLobbyClient();
   if (network) {
     if (game && game.mode.type === 'online' && !game.gameOver) {
       network.sendResign();
@@ -840,35 +950,28 @@ function returnToMenuFromGame(): void {
   window.location.hash = '';
 }
 
-function showLobby(inviteUrl: string): void {
+function showLobbyView(viewId: string): void {
   const lobby = document.getElementById('online-lobby')!;
+  lobby.style.display = 'flex';
+  for (const view of ['lobby-browse', 'lobby-create', 'lobby-quick', 'lobby-waiting']) {
+    const el = document.getElementById(view);
+    if (el) el.style.display = view === viewId ? '' : 'none';
+  }
+}
+
+function showWaitingView(title: string, status: string, pulse = true): void {
+  showLobbyView('lobby-waiting');
   const lobbyTitle = document.getElementById('lobby-title')!;
   const linkRow = document.getElementById('lobby-link-row')!;
-  const linkInput = document.getElementById('lobby-link') as HTMLInputElement;
-  const copyBtn = document.getElementById('lobby-copy-btn')!;
   const statusEl = document.getElementById('lobby-status')!;
-  const backBtn = document.getElementById('lobby-back-btn') as HTMLButtonElement;
-
-  lobbyTitle.textContent = 'Waiting for opponent...';
-  lobbyTitle.style.animation = 'lobbyPulse 2s ease-in-out infinite';
-  linkRow.style.display = 'flex';
-  linkInput.value = inviteUrl;
-  statusEl.textContent = 'Share this link with your opponent';
-  copyBtn.textContent = 'Copy';
-  lobby.style.display = 'flex';
-  backBtn.style.display = '';
-
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(inviteUrl).then(() => {
-      copyBtn.textContent = 'Copied!';
-      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
-    });
-  };
+  lobbyTitle.textContent = title;
+  lobbyTitle.style.animation = pulse ? 'lobbyPulse 2s ease-in-out infinite' : 'none';
+  linkRow.style.display = 'none';
+  statusEl.textContent = status;
 }
 
 function hideLobby(): void {
-  const lobby = document.getElementById('online-lobby')!;
-  lobby.style.display = 'none';
+  document.getElementById('online-lobby')!.style.display = 'none';
 }
 
 function describeOnlineError(err: unknown, fallback: string): string {
@@ -878,116 +981,486 @@ function describeOnlineError(err: unknown, fallback: string): string {
   return fallback;
 }
 
-async function startOnlineHost(localColor: PieceColor, setup: SetupMode): Promise<void> {
-  onlineFlowCancelled = false;
-  network = new Network();
+function handleLobbyError(err: unknown, fallback: string): void {
+  console.error(fallback, err);
+  showWaitingView('Connection failed', describeOnlineError(err, fallback), false);
+  if (network) { network.disconnect(); network = null; }
+  if (lobbyClient) { lobbyClient.disconnect(); lobbyClient = null; }
+}
 
-  try {
-    const peerId = await network.host((msg) => {
-      // Lobby isn't up yet, no-op for host init progress
-    });
-    const base = window.location.href.split('#')[0];
-    const inviteUrl = `${base}#online:${peerId}:${localColor}:${setup}`;
-
-    hideMenu();
-    showLobby(inviteUrl);
-    const statusEl = document.getElementById('lobby-status')!;
-    statusEl.textContent = 'Waiting for opponent connection...';
-
-    await network.waitForGuest((msg) => {
-      statusEl.textContent = msg;
-    });
-    if (onlineFlowCancelled || !network) return;
-    statusEl.textContent = 'Opponent connected. Verifying session...';
-
-    const hello = await network.waitForHello();
-    if (!network.isProtocolCompatible(hello.protocolVersion)) {
-      throw new Error('Incompatible game version with opponent');
-    }
-    if (hello.hostColor !== localColor || hello.setup !== setup) {
-      throw new Error('Invite link settings do not match host session');
-    }
-
-    network.sendReady();
-    statusEl.textContent = 'Finalizing game start...';
-    await network.waitForReady();
-    if (onlineFlowCancelled || !network) return;
-
-    hideLobby();
-    showGame();
-    initGame({ type: 'online', localColor, setup });
-    network.sendStart();
-  } catch (err) {
-    if (onlineFlowCancelled) return;
-    console.error('Failed to host online game:', err);
-    const lobbyTitle = document.getElementById('lobby-title')!;
-    const statusEl = document.getElementById('lobby-status')!;
-    lobbyTitle.textContent = 'Connection failed';
-    lobbyTitle.style.animation = 'none';
-    statusEl.textContent = `${describeOnlineError(
-      err,
-      'Could not start online session.',
-    )}. Try creating a fresh invite link.`;
-    network.disconnect();
-    network = null;
+function cleanupLobbyClient(): void {
+  if (lobbyClient) {
+    lobbyClient.disconnect();
+    lobbyClient = null;
   }
 }
 
+/* ─── Reusable PeerJS handshake helpers ─── */
+
+async function runHostHandshake(localColor: PieceColor, setup: SetupMode): Promise<void> {
+  if (!network) throw new Error('No network');
+  const statusEl = document.getElementById('lobby-status')!;
+
+  statusEl.textContent = 'Opponent connecting...';
+  await network.waitForGuest((msg) => { statusEl.textContent = msg; });
+  if (onlineFlowCancelled || !network) return;
+
+  statusEl.textContent = 'Verifying session...';
+  const hello = await network.waitForHello();
+  if (!network.isProtocolCompatible(hello.protocolVersion)) {
+    throw new Error('Incompatible game version with opponent');
+  }
+  if (hello.hostColor !== localColor || hello.setup !== setup) {
+    throw new Error('Session settings mismatch');
+  }
+
+  network.sendReady();
+  statusEl.textContent = 'Finalizing...';
+  await network.waitForReady();
+  if (onlineFlowCancelled || !network) return;
+
+  hideLobby();
+  showGame();
+  initGame({ type: 'online', localColor, setup });
+  network.sendStart();
+}
+
+async function runGuestHandshake(hostPeerId: string, hostColor: PieceColor, setup: SetupMode): Promise<void> {
+  if (!network) throw new Error('No network');
+  const statusEl = document.getElementById('lobby-status')!;
+  const localColor = hostColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
+
+  statusEl.textContent = 'Connecting to opponent...';
+  await network.join(hostPeerId, (msg) => { statusEl.textContent = msg; });
+  if (onlineFlowCancelled || !network) return;
+
+  statusEl.textContent = 'Negotiating session...';
+  network.sendHello(hostColor, setup);
+  await network.waitForReady();
+  if (onlineFlowCancelled || !network) return;
+
+  network.sendReady();
+  statusEl.textContent = 'Starting game...';
+  await network.waitForStart();
+  if (onlineFlowCancelled || !network) return;
+
+  hideLobby();
+  showGame();
+  initGame({ type: 'online', localColor, setup });
+}
+
+/* ─── Direct link flows (kept for backward compat) ─── */
+
 async function startOnlineGuest(hostPeerId: string, hostColor: PieceColor, setup: SetupMode): Promise<void> {
   onlineFlowCancelled = false;
-  const localColor = hostColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
   network = new Network();
 
   const menuScreen = document.getElementById('menu-screen')!;
   menuScreen.style.display = 'none';
 
-  const lobby = document.getElementById('online-lobby')!;
-  const lobbyTitle = document.getElementById('lobby-title')!;
-  const linkRow = document.getElementById('lobby-link-row')!;
-  const statusEl = document.getElementById('lobby-status')!;
-  const backBtn = document.getElementById('lobby-back-btn') as HTMLButtonElement;
-
-  lobbyTitle.textContent = 'Connecting...';
-  lobbyTitle.style.animation = 'lobbyPulse 2s ease-in-out infinite';
-  linkRow.style.display = 'none';
-  backBtn.style.display = '';
-  statusEl.textContent = `You are playing as ${localColor}. Attempting to connect...`;
-  lobby.style.display = 'flex';
+  const localColor = hostColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
+  showWaitingView('Connecting...', `You are playing as ${localColor}. Attempting to connect...`);
 
   try {
-    await network.join(hostPeerId, (msg) => {
-      statusEl.textContent = msg;
-    });
-    if (onlineFlowCancelled || !network) return;
-    statusEl.textContent = 'Connected. Negotiating session...';
-
-    network.sendHello(hostColor, setup);
-    await network.waitForReady();
-    if (onlineFlowCancelled || !network) return;
-    network.sendReady();
-    statusEl.textContent = 'Waiting for host to start game...';
-    await network.waitForStart();
-    if (onlineFlowCancelled || !network) return;
-
-    hideLobby();
-    showGame();
-    initGame({ type: 'online', localColor, setup });
+    await runGuestHandshake(hostPeerId, hostColor, setup);
   } catch (err) {
     if (onlineFlowCancelled) return;
-    console.error('Failed to join online game:', err);
-    lobbyTitle.textContent = 'Connection failed';
+    handleLobbyError(err, 'Could not connect to host. The link may be expired or the host may be offline.');
+  }
+}
+
+/* ─── Main online lobby screen ─── */
+
+async function goOnline(): Promise<void> {
+  onlineFlowCancelled = false;
+  hideMenu();
+  showLobbyView('lobby-browse');
+
+  try {
+    lobbyClient = new LobbyClient();
+    await lobbyClient.connect();
+    if (onlineFlowCancelled) return;
+
+    lobbyClient.onMessage((msg) => {
+      if (msg.type === 'roomList') {
+        renderRoomTable(msg.rooms as RoomInfo[]);
+      } else if (msg.type === 'roomJoined') {
+        showWaitingView('Joining game...', 'Connecting to host...');
+        joinViaLobby(msg.hostPeerId, msg.hostColor as PieceColor, msg.setup as SetupMode);
+      } else if (msg.type === 'inviteMatched') {
+        showWaitingView('Joining game...', 'Connecting to host...');
+        joinViaLobby(msg.hostPeerId, msg.hostColor as PieceColor, msg.setup as SetupMode);
+      } else if (msg.type === 'error') {
+        const statusEl = document.getElementById('lobby-status');
+        if (statusEl) statusEl.textContent = msg.message;
+      }
+    });
+
+    lobbyClient.onDisconnect(() => {
+      const heading = document.getElementById('lobby-heading');
+      if (heading) heading.textContent = 'Disconnected';
+    });
+
+    lobbyClient.listRooms();
+
+    wireCreateView();
+    wireQuickPlayView();
+    wireBrowseActions();
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    handleLobbyError(err, 'Could not connect to lobby.');
+  }
+}
+
+function wireCreateView(): void {
+  const createBtn = document.getElementById('lobby-create-btn')!;
+  const startBtn = document.getElementById('create-start-btn')!;
+  const backBtn = document.getElementById('create-back-btn')!;
+
+  const colorBtns = document.querySelectorAll<HTMLButtonElement>('#create-color-buttons .create-toggle-btn');
+  const visBtns = document.querySelectorAll<HTMLButtonElement>('#create-vis-buttons .create-toggle-btn');
+
+  const wireToggleGroup = (btns: NodeListOf<HTMLButtonElement>) => {
+    btns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        btns.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+      });
+    });
+  };
+  wireToggleGroup(colorBtns);
+  wireToggleGroup(visBtns);
+
+  createBtn.addEventListener('click', () => {
+    showLobbyView('lobby-create');
+  });
+
+  backBtn.addEventListener('click', () => {
+    showLobbyView('lobby-browse');
+  });
+
+  startBtn.addEventListener('click', () => {
+    const setup = (document.getElementById('create-mode-select') as HTMLSelectElement).value as SetupMode;
+    const color = document.querySelector<HTMLButtonElement>('#create-color-buttons .selected')?.dataset.color as PieceColor ?? 'white';
+    const vis = document.querySelector<HTMLButtonElement>('#create-vis-buttons .selected')?.dataset.vis ?? 'public';
+
+    if (vis === 'private') {
+      createInviteWithColor(color, setup);
+    } else {
+      createRoomWithColor(color, setup);
+    }
+  });
+}
+
+function wireQuickPlayView(): void {
+  const quickBtn = document.getElementById('lobby-quick-btn')!;
+  const startBtn = document.getElementById('quick-start-btn')!;
+  const backBtn = document.getElementById('quick-back-btn')!;
+
+  quickBtn.addEventListener('click', () => {
+    showLobbyView('lobby-quick');
+  });
+
+  backBtn.addEventListener('click', () => {
+    showLobbyView('lobby-browse');
+  });
+
+  startBtn.addEventListener('click', () => {
+    const setup = (document.getElementById('quick-mode-select') as HTMLSelectElement).value as SetupMode;
+    startQuickPlay(setup);
+  });
+}
+
+function wireBrowseActions(): void {
+  const codeInput = document.getElementById('room-code-input') as HTMLInputElement;
+  const codeJoinBtn = document.getElementById('room-code-join-btn')!;
+  codeJoinBtn.onclick = () => {
+    const code = codeInput.value.trim().toUpperCase();
+    if (code.length > 0 && lobbyClient) {
+      lobbyClient.acceptInvite(code);
+    }
+  };
+  codeInput.onkeydown = (e) => {
+    if (e.key === 'Enter') codeJoinBtn.click();
+  };
+}
+
+/* ─── Lobby-based flows ─── */
+
+async function startQuickPlay(setup: SetupMode): Promise<void> {
+  onlineFlowCancelled = false;
+
+  try {
+    showWaitingView('Finding Match...', 'Looking for open games...');
+
+    if (!lobbyClient || !lobbyClient.connected) {
+      lobbyClient = new LobbyClient();
+      await lobbyClient.connect();
+    }
+    if (onlineFlowCancelled) return;
+
+    const rooms = await new Promise<RoomInfo[]>((resolve, reject) => {
+      lobbyClient!.onMessage((msg) => {
+        if (msg.type === 'roomList') resolve(msg.rooms as RoomInfo[]);
+        else if (msg.type === 'error') reject(new Error(msg.message));
+      });
+      lobbyClient!.onDisconnect(() => reject(new Error('Lost connection to lobby server')));
+      lobbyClient!.listRooms();
+    });
+    if (onlineFlowCancelled) return;
+
+    const matching = rooms
+      .filter(r => r.setup === setup)
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    if (matching.length > 0) {
+      const oldest = matching[0];
+      const statusEl = document.getElementById('lobby-status')!;
+      statusEl.textContent = 'Joining game...';
+
+      const joinPromise = new Promise<{ hostPeerId: string; hostColor: PieceColor; setup: SetupMode }>((resolve, reject) => {
+        lobbyClient!.onMessage((msg) => {
+          if (msg.type === 'roomJoined') {
+            resolve({
+              hostPeerId: msg.hostPeerId,
+              hostColor: msg.hostColor as PieceColor,
+              setup: msg.setup as SetupMode,
+            });
+          } else if (msg.type === 'error') reject(new Error(msg.message));
+        });
+        lobbyClient!.onDisconnect(() => reject(new Error('Lost connection to lobby server')));
+      });
+
+      lobbyClient!.joinRoom(oldest.id);
+      const match = await joinPromise;
+      if (onlineFlowCancelled) return;
+
+      showWaitingView('Game Found!', 'Connecting to host...', false);
+      joinViaLobby(match.hostPeerId, match.hostColor, match.setup);
+      return;
+    }
+
+    const lobbyTitle = document.getElementById('lobby-title')!;
+    lobbyTitle.textContent = 'No Games Available';
     lobbyTitle.style.animation = 'none';
-    statusEl.textContent = `${describeOnlineError(
-      err,
-      'Could not connect to host',
-    )}. The link may be expired or the host may be offline.`;
-    network.disconnect();
-    network = null;
+    const statusEl = document.getElementById('lobby-status')!;
+    statusEl.textContent = 'No one is playing right now. Try creating a game!';
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    handleLobbyError(err, 'Could not find a match.');
+  }
+}
+
+async function createRoomWithColor(localColor: PieceColor, setup: SetupMode): Promise<void> {
+  onlineFlowCancelled = false;
+  network = new Network();
+
+  try {
+    showWaitingView('Creating room...', 'Setting up peer connection...');
+
+    const peerId = await network.host();
+    if (onlineFlowCancelled) return;
+
+    const statusEl = document.getElementById('lobby-status')!;
+
+    if (!lobbyClient || !lobbyClient.connected) {
+      statusEl.textContent = 'Connecting to lobby...';
+      lobbyClient = new LobbyClient();
+      await lobbyClient.connect();
+    }
+    if (onlineFlowCancelled) return;
+
+    const fillPromise = new Promise<void>((resolve, reject) => {
+      lobbyClient!.onMessage((msg) => {
+        if (msg.type === 'roomCreated') {
+          const lobbyTitle = document.getElementById('lobby-title')!;
+          lobbyTitle.textContent = 'Room Created';
+          statusEl.textContent = `Waiting for an opponent to join... (playing as ${localColor})`;
+        } else if (msg.type === 'roomFilled') {
+          resolve();
+        } else if (msg.type === 'error') {
+          reject(new Error(msg.message));
+        }
+      });
+      lobbyClient!.onDisconnect(() => reject(new Error('Lost connection to lobby server')));
+    });
+
+    lobbyClient!.createRoom(peerId, localColor, setup);
+    await fillPromise;
+    if (onlineFlowCancelled) return;
+
+    cleanupLobbyClient();
+    statusEl.textContent = 'Opponent found! Connecting...';
+
+    await runHostHandshake(localColor, setup);
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    handleLobbyError(err, 'Could not create room.');
+  }
+}
+
+async function joinViaLobby(hostPeerId: string, hostColor: PieceColor, setup: SetupMode): Promise<void> {
+  try {
+    cleanupLobbyClient();
+    network = new Network();
+    await runGuestHandshake(hostPeerId, hostColor, setup);
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    handleLobbyError(err, 'Could not join game.');
+  }
+}
+
+function renderRoomTable(rooms: RoomInfo[]): void {
+  const tbody = document.getElementById('room-table-body')!;
+  const emptyEl = document.getElementById('room-table-empty')!;
+  const tableEl = document.getElementById('room-table')!;
+
+  tbody.replaceChildren();
+
+  if (rooms.length === 0) {
+    tableEl.style.display = 'none';
+    emptyEl.style.display = '';
+    return;
+  }
+
+  tableEl.style.display = '';
+  emptyEl.style.display = 'none';
+
+  for (const room of rooms) {
+    const tr = document.createElement('tr');
+    const modeTd = document.createElement('td');
+    modeTd.textContent = room.setup.charAt(0).toUpperCase() + room.setup.slice(1);
+
+    const colorTd = document.createElement('td');
+    const yourColor = room.hostColor === PieceColor.White ? 'Black' : 'White';
+    colorTd.textContent = yourColor;
+
+    const actionTd = document.createElement('td');
+    const tag = document.createElement('span');
+    tag.className = 'table-join-tag';
+    tag.textContent = 'Join';
+    actionTd.appendChild(tag);
+
+    tr.append(modeTd, colorTd, actionTd);
+    tr.addEventListener('click', () => {
+      lobbyClient?.joinRoom(room.id);
+    });
+
+    tbody.appendChild(tr);
+  }
+}
+
+async function createInviteWithColor(localColor: PieceColor, setup: SetupMode): Promise<void> {
+  onlineFlowCancelled = false;
+  network = new Network();
+
+  try {
+    showWaitingView('Creating invite...', 'Setting up connection...');
+
+    const peerId = await network.host();
+    if (onlineFlowCancelled) return;
+
+    const lobbyTitle = document.getElementById('lobby-title')!;
+    const statusEl = document.getElementById('lobby-status')!;
+    const linkRow = document.getElementById('lobby-link-row')!;
+    const linkInput = document.getElementById('lobby-link') as HTMLInputElement;
+    const copyBtn = document.getElementById('lobby-copy-btn')!;
+
+    if (!lobbyClient || !lobbyClient.connected) {
+      statusEl.textContent = 'Connecting to lobby...';
+      lobbyClient = new LobbyClient();
+      await lobbyClient.connect();
+    }
+    if (onlineFlowCancelled) return;
+
+    const fillPromise = new Promise<void>((resolve, reject) => {
+      lobbyClient!.onMessage((msg) => {
+        if (msg.type === 'inviteCreated') {
+          lobbyTitle.textContent = 'Share This Code';
+          lobbyTitle.style.animation = 'none';
+          linkRow.style.display = 'flex';
+          linkInput.value = msg.code;
+          linkInput.className = 'invite-code-display';
+          statusEl.textContent = `Playing as ${localColor} — share this code with your friend`;
+          copyBtn.textContent = 'Copy';
+          copyBtn.onclick = () => {
+            navigator.clipboard.writeText(msg.code).then(() => {
+              copyBtn.textContent = 'Copied!';
+              setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+            });
+          };
+        } else if (msg.type === 'inviteFilled') {
+          resolve();
+        } else if (msg.type === 'error') {
+          reject(new Error(msg.message));
+        }
+      });
+      lobbyClient!.onDisconnect(() => reject(new Error('Lost connection to lobby server')));
+    });
+
+    lobbyClient!.createInvite(peerId, localColor, setup);
+    await fillPromise;
+    if (onlineFlowCancelled) return;
+
+    cleanupLobbyClient();
+
+    linkInput.className = '';
+    statusEl.textContent = 'Friend joined! Connecting...';
+
+    await runHostHandshake(localColor, setup);
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    const linkInput = document.getElementById('lobby-link') as HTMLInputElement;
+    linkInput.className = '';
+    handleLobbyError(err, 'Could not create invite.');
+  }
+}
+
+async function acceptInviteFromHash(code: string): Promise<void> {
+  onlineFlowCancelled = false;
+
+  const menuScreen = document.getElementById('menu-screen')!;
+  menuScreen.style.display = 'none';
+
+  showWaitingView('Joining via invite...', 'Connecting to lobby...');
+
+  try {
+    lobbyClient = new LobbyClient();
+    await lobbyClient.connect();
+    if (onlineFlowCancelled) return;
+
+    const matchPromise = new Promise<{ hostPeerId: string; hostColor: PieceColor; setup: SetupMode }>((resolve, reject) => {
+      lobbyClient!.onMessage((msg) => {
+        if (msg.type === 'inviteMatched') {
+          resolve({
+            hostPeerId: msg.hostPeerId,
+            hostColor: msg.hostColor as PieceColor,
+            setup: msg.setup as SetupMode,
+          });
+        } else if (msg.type === 'error') {
+          reject(new Error(msg.message));
+        }
+      });
+      lobbyClient!.onDisconnect(() => reject(new Error('Lost connection to lobby server')));
+    });
+
+    lobbyClient.acceptInvite(code);
+    const match = await matchPromise;
+    if (onlineFlowCancelled) return;
+
+    cleanupLobbyClient();
+
+    network = new Network();
+    await runGuestHandshake(match.hostPeerId, match.hostColor, match.setup);
+  } catch (err) {
+    if (onlineFlowCancelled) return;
+    handleLobbyError(err, 'Could not join via invite code.');
   }
 }
 
 function returnToHomeFromLobby(): void {
   onlineFlowCancelled = true;
+  cleanupLobbyClient();
   if (network) {
     network.disconnect();
     network = null;
@@ -997,43 +1470,65 @@ function returnToHomeFromLobby(): void {
   window.location.hash = '';
 }
 
-function parseOnlineHash(): { peerId: string; hostColor: PieceColor; setup: SetupMode } | null {
+function parseOnlineHash():
+  | { type: 'direct'; peerId: string; hostColor: PieceColor; setup: SetupMode }
+  | { type: 'invite'; code: string }
+  | null {
   const hash = window.location.hash;
-  const match = hash.match(/^#online:([^:]+):(white|black)(?::(classic|barricade|pawnWall))?$/);
-  if (!match) return null;
-  return {
-    peerId: match[1],
-    hostColor: match[2] as PieceColor,
-    setup: (match[3] as SetupMode | undefined) ?? 'classic',
-  };
+
+  const directMatch = hash.match(/^#online:([^:]+):(white|black)(?::(classic|barricade|pawnWall))?$/);
+  if (directMatch) {
+    return {
+      type: 'direct',
+      peerId: directMatch[1],
+      hostColor: directMatch[2] as PieceColor,
+      setup: (directMatch[3] as SetupMode | undefined) ?? 'classic',
+    };
+  }
+
+  const inviteMatch = hash.match(/^#invite:([A-Za-z0-9]+)$/);
+  if (inviteMatch) {
+    return { type: 'invite', code: inviteMatch[1].toUpperCase() };
+  }
+
+  return null;
 }
 
-const onlineParams = parseOnlineHash();
-if (onlineParams) {
-  window.location.hash = '';
-  const lobbyBackBtn = document.getElementById('lobby-back-btn');
-  lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
-  const gameHomeBtn = document.getElementById('game-home-btn');
-  gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
-  startOnlineGuest(onlineParams.peerId, onlineParams.hostColor, onlineParams.setup);
-} else {
-  menuController = setupMenu({
-    startLocal: (setup) => {
-      hideMenu();
-      showGame();
-      initGame({ type: 'local', setup });
-    },
-    startBot: (difficulty, setup) => {
-      hideMenu();
-      showGame();
-      initGame({ type: 'bot', difficulty, setup });
-    },
-    startOnlineHost: (localColor, setup) => {
-      startOnlineHost(localColor, setup);
-    },
-  });
-  const lobbyBackBtn = document.getElementById('lobby-back-btn');
-  lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
-  const gameHomeBtn = document.getElementById('game-home-btn');
-  gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
-}
+loadModels().then(() => {
+  const onlineParams = parseOnlineHash();
+  if (onlineParams) {
+    window.location.hash = '';
+    const lobbyBackBtn = document.getElementById('lobby-back-btn');
+    lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
+    const gameHomeBtn = document.getElementById('game-home-btn');
+    gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
+
+    if (onlineParams.type === 'direct') {
+      startOnlineGuest(onlineParams.peerId, onlineParams.hostColor, onlineParams.setup);
+    } else {
+      acceptInviteFromHash(onlineParams.code);
+    }
+  } else {
+    menuController = setupMenu({
+      startLocal: (setup) => {
+        hideMenu();
+        showGame();
+        initGame({ type: 'local', setup });
+      },
+      startBot: (difficulty, setup) => {
+        hideMenu();
+        showGame();
+        initGame({ type: 'bot', difficulty, setup });
+      },
+      goOnline: () => {
+        goOnline();
+      },
+    });
+    const lobbyBrowseBack = document.getElementById('lobby-browse-back');
+    lobbyBrowseBack?.addEventListener('click', returnToHomeFromLobby);
+    const lobbyBackBtn = document.getElementById('lobby-back-btn');
+    lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
+    const gameHomeBtn = document.getElementById('game-home-btn');
+    gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
+  }
+});
