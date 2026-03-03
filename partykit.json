@@ -1,0 +1,5 @@
+{
+  "name": "3dchess",
+  "main": "src/party.ts",
+  "compatibilityDate": "2024-03-03"
+}

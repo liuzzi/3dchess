@@ -35,6 +35,8 @@ export class Interaction {
   private pendingHoverX = 0;
   private pendingHoverY = 0;
 
+  private onPieceHover: ((piece: Piece | null, x: number, y: number) => void) | null = null;
+
   constructor(
     private renderer: Renderer,
     private boardView: BoardView,
@@ -50,6 +52,7 @@ export class Interaction {
       this.boardView.clearHover();
       this.pieceView?.setHovered(null);
       this.onHover?.(null);
+      this.onPieceHover?.(null, 0, 0);
       canvas.style.cursor = 'default';
     }, { signal });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
@@ -69,6 +72,10 @@ export class Interaction {
 
   setHoverHandler(cb: (pos: Position3D | null) => void): void {
     this.onHover = cb;
+  }
+
+  setPieceHoverHandler(cb: (piece: Piece | null, x: number, y: number) => void): void {
+    this.onPieceHover = cb;
   }
 
   setHoverFilter(cb: (piece: Piece) => boolean): void {
@@ -147,6 +154,8 @@ export class Interaction {
         this.clearLongPressTimer();
         this.boardView.clearHover();
         this.pieceView?.setHovered(null);
+        this.onHover?.(null);
+        this.onPieceHover?.(null, 0, 0);
         this.renderer.webgl.domElement.style.cursor = 'default';
         return;
       }
@@ -204,8 +213,10 @@ export class Interaction {
     if (piece && (!this.canHoverPiece || this.canHoverPiece(piece))) {
       this.pieceView?.setHovered(piece);
       canInteractWithPiece = true;
+      this.onPieceHover?.(piece, clientX, clientY);
     } else {
       this.pieceView?.setHovered(null);
+      this.onPieceHover?.(null, clientX, clientY);
     }
 
     this.renderer.webgl.domElement.style.cursor = canInteractWithPiece ? 'pointer' : 'default';

@@ -1,5 +1,5 @@
 import { Board } from './board';
-import { getLegalMoves, getValidMoves, getAttackedSquares, isKingInCheck } from './movement';
+import { forEachAttackedSquare, getLegalMoves, getValidMoves, isKingInCheck } from './movement';
 import { Piece, PieceColor, PieceType, Position3D, Difficulty, SetupMode, posKey, posKeyXYZ } from './types';
 import { autoPromoteToQueen } from './promotion';
 
@@ -267,7 +267,11 @@ function kingRingAttackPressure(
   if (!king) return 0;
   let pressure = 0;
   for (const p of board.getPiecesOfColor(attackerColor)) {
-    const moves = moveCache.get(p) ?? getValidMoves(board, p);
+    let moves = moveCache.get(p);
+    if (!moves) {
+      moves = getValidMoves(board, p);
+      moveCache.set(p, moves);
+    }
     for (const m of moves) {
       if (
         Math.abs(m.x - king.position.x) <= 1 &&
@@ -283,22 +287,26 @@ function kingRingAttackPressure(
 
 const evalPawnFileCounts = new Int32Array(64);
 const evalPawnSet = new Uint8Array(512);
+const evalPawnsBuffer: Piece[] = [];
 
 function pawnStructureScore(board: Board, color: PieceColor): number {
-  const pawns = Array.from(board.getPiecesOfColor(color)).filter(p => p.type === PieceType.Pawn);
-  if (pawns.length === 0) return 0;
+  evalPawnsBuffer.length = 0;
+  for (const p of board.getPiecesOfColor(color)) {
+    if (p.type === PieceType.Pawn) evalPawnsBuffer.push(p);
+  }
+  if (evalPawnsBuffer.length === 0) return 0;
 
   evalPawnFileCounts.fill(0);
   evalPawnSet.fill(0);
   
-  for (const p of pawns) {
+  for (const p of evalPawnsBuffer) {
     const fileKey = p.position.x | (p.position.z << 3);
     evalPawnSet[posKey(p.position)] = 1;
     evalPawnFileCounts[fileKey]++;
   }
 
   let score = 0;
-  for (const p of pawns) {
+  for (const p of evalPawnsBuffer) {
     const fileKey = p.position.x | (p.position.z << 3);
     const fileCount = evalPawnFileCounts[fileKey];
     if (fileCount > 1) score -= (fileCount - 1) * 9;
@@ -351,10 +359,9 @@ function attackedAndDefendedCounts(
   evalBlackAttacks.fill(0);
   for (const piece of board.pieces) {
     const targetMap = piece.color === PieceColor.White ? evalWhiteAttacks : evalBlackAttacks;
-    const moves = getAttackedSquares(board, piece);
-    for (const m of moves) {
-      targetMap[posKey(m)]++;
-    }
+    forEachAttackedSquare(board, piece, (x, y, z) => {
+      targetMap[posKeyXYZ(x, y, z)]++;
+    });
   }
   return { white: evalWhiteAttacks, black: evalBlackAttacks };
 }
@@ -364,12 +371,11 @@ const evalMoveCache = new Map<Piece, Position3D[]>();
 function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): number {
   const opponentColor = botColor === PieceColor.White ? PieceColor.Black : PieceColor.White;
   evalMoveCache.clear();
+  let phaseMaterial = 0;
   for (const p of board.pieces) {
     evalMoveCache.set(p, getValidMoves(board, p));
+    if (p.type !== PieceType.King) phaseMaterial += MG_VALUE[p.type];
   }
-  const phaseMaterial = board.pieces
-    .filter(p => p.type !== PieceType.King)
-    .reduce((acc, p) => acc + MG_VALUE[p.type], 0);
   const phase = Math.min(1, phaseMaterial / 8000);
 
   let mg = 0;
@@ -378,13 +384,14 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
     const sign = piece.color === botColor ? 1 : -1;
     const central = centrality(piece.position);
     const mobility = pieceActivity((evalMoveCache.get(piece) ?? []).length, piece);
+    const pawnProgress = piece.type === PieceType.Pawn ? progressBonus(piece) : 0;
 
     let mgTerm = MG_VALUE[piece.type] + mobility * 1.5 + central * (piece.type === PieceType.King ? -1.4 : 1.7);
     let egTerm = EG_VALUE[piece.type] + mobility + central * (piece.type === PieceType.King ? 2.2 : 1.0);
 
-    if (piece.type === PieceType.Pawn) {
-      mgTerm += progressBonus(piece) * 0.6;
-      egTerm += progressBonus(piece) * 1.2;
+    if (pawnProgress) {
+      mgTerm += pawnProgress * 0.6;
+      egTerm += pawnProgress * 1.2;
     }
 
     mg += sign * mgTerm;
@@ -480,12 +487,13 @@ function seeMoveOrderingPenalty(board: Board, move: MoveCandidate): number {
 
 function maxThreatenedEnemyValueByPiece(board: Board, piece: Piece): number {
   let best = 0;
-  for (const sq of getValidMoves(board, piece)) {
-    const occ = board.getPieceAt(sq);
-    if (!occ || occ.color === piece.color) continue;
-    const v = PIECE_VALUE[occ.type];
-    if (v > best) best = v;
-  }
+  forEachAttackedSquare(board, piece, (x, y, z) => {
+    const occ = board.getPieceAtXYZ(x, y, z);
+    if (occ && occ.color !== piece.color) {
+      const v = PIECE_VALUE[occ.type];
+      if (v > best) best = v;
+    }
+  });
   return best;
 }
 
@@ -530,12 +538,12 @@ function orderMoves(
 
         // Prioritize "queen/rook/bishop/knight now attacks high-value piece" lines.
         let threatenedValue = 0;
-        for (const sq of getValidMoves(board, move.piece)) {
-          const occ = board.getPieceAt(sq);
+        forEachAttackedSquare(board, move.piece, (x, y, z) => {
+          const occ = board.getPieceAtXYZ(x, y, z);
           if (occ && occ.color !== move.piece.color) {
             threatenedValue = Math.max(threatenedValue, PIECE_VALUE[occ.type]);
           }
-        }
+        });
         score += threatenedValue * 0.7;
 
         // Opening guidance: develop pieces first when tactical urgency is low.
@@ -582,13 +590,20 @@ function findCheapestAttacker(board: Board, target: Position3D, attackerColor: P
   let cheapest: Piece | null = null;
   let cheapestVal = Infinity;
   for (const p of board.getPiecesOfColor(attackerColor)) {
-    // SEE only needs attack coverage; avoid expensive full legal move generation.
-    const pseudo = getAttackedSquares(board, p);
-    if (!pseudo.some(m => m.x === target.x && m.y === target.y && m.z === target.z)) continue;
+    let attacksTarget = false;
+    forEachAttackedSquare(board, p, (x, y, z) => {
+      if (x === target.x && y === target.y && z === target.z) attacksTarget = true;
+    });
+    if (!attacksTarget) continue;
     const v = PIECE_VALUE[p.type];
     if (v < cheapestVal) {
-      cheapestVal = v;
-      cheapest = p;
+      const applied = board.applyMove(p, target);
+      const isLegal = !isKingInCheck(board, attackerColor);
+      board.unapplyMove(applied);
+      if (isLegal) {
+        cheapestVal = v;
+        cheapest = p;
+      }
     }
   }
   return cheapest;
@@ -598,8 +613,12 @@ function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0):
   if (!move.captured || depth > 8) return 0;
   
   const target = move.to;
-  const victimValue = PIECE_VALUE[move.captured.type];
-  let gain = victimValue;
+  let gain = PIECE_VALUE[move.captured.type];
+  
+  const promoRow = move.piece.color === PieceColor.White ? 7 : 0;
+  if (move.piece.type === PieceType.Pawn && target.y === promoRow) {
+    gain += PIECE_VALUE[PieceType.Queen] - PIECE_VALUE[PieceType.Pawn];
+  }
   
   const applied = board.applyMove(move.piece, target);
   try {
@@ -609,13 +628,10 @@ function staticExchangeEvaluation(board: Board, move: MoveCandidate, depth = 0):
     
     if (cheapestAttacker) {
       const recapture: MoveCandidate = { piece: cheapestAttacker, to: target, captured: move.piece };
-      const legalRecapture = !isKingInCheck(board, enemy);
-      if (legalRecapture) {
-         const opponentGain = staticExchangeEvaluation(board, recapture, depth + 1);
-         // The opponent will only recapture if it benefits them (or breaks even)
-         if (opponentGain >= 0) {
-           gain -= opponentGain;
-         }
+      const opponentGain = staticExchangeEvaluation(board, recapture, depth + 1);
+      // The opponent will only recapture if it benefits them (or breaks even)
+      if (opponentGain >= 0) {
+        gain -= opponentGain;
       }
     }
   } finally {

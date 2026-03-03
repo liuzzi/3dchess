@@ -287,6 +287,14 @@ export class PieceView {
     return this.hitTargetListCache;
   }
 
+  updateLods(camera: THREE.Camera): void {
+    for (const group of this.meshes.values()) {
+      group.traverse((child) => {
+        if (child instanceof THREE.LOD) child.update(camera);
+      });
+    }
+  }
+
   setHovered(piece: Piece | null): void {
     if (this.hoveredPiece === piece) return;
     this.hoveredPiece = piece;

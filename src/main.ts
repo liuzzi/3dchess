@@ -767,6 +767,19 @@ function initGame(mode: GameMode): void {
     queueHoverPreview(pos);
   });
 
+  interaction.setPieceHoverHandler((piece: Piece | null, x: number, y: number) => {
+    const tooltip = document.getElementById('piece-tooltip');
+    if (!tooltip) return;
+    if (piece) {
+      tooltip.textContent = piece.type;
+      tooltip.style.left = `${x + 15}px`;
+      tooltip.style.top = `${y + 15}px`;
+      tooltip.classList.add('is-visible');
+    } else {
+      tooltip.classList.remove('is-visible');
+    }
+  });
+
   if (bot) {
     bot.terminate();
     bot = null;
@@ -809,18 +822,22 @@ function initGame(mode: GameMode): void {
         moveAnimationQueue = moveAnimationQueue.then(async () => {
           if (token !== moveAnimationToken) return;
           isAnimatingMove = true;
+          let shouldFinalize = false;
           try {
             await animateMoveSteps(piece, from, to, token, captured);
             if (token === moveAnimationToken) {
               boardView.setTraversalCell(null);
               pieceView.sync(game.board);
-              game.finalizeMove();
+              shouldFinalize = true;
             }
           } finally {
             boardView.setTraversalCell(null);
             if (token === moveAnimationToken) {
               isAnimatingMove = false;
             }
+          }
+          if (shouldFinalize && token === moveAnimationToken) {
+            game.finalizeMove();
           }
         });
         break;
@@ -885,13 +902,19 @@ function initGame(mode: GameMode): void {
         break;
       }
       case 'botTurn':
-        handleBotTurn();
+        // Ensure bot search starts only after move animation pipeline has fully settled.
+        moveAnimationQueue = moveAnimationQueue.then(async () => {
+          if (isAnimatingMove) return;
+          await Promise.resolve();
+          if (!isAnimatingMove) await handleBotTurn();
+        });
         break;
     }
   });
 
   renderer.startLoop(() => {
     tickEffects(performance.now());
+    pieceView.updateLods(renderer.camera);
   });
 }
 
@@ -992,6 +1015,7 @@ function hideGame(): void {
     'side-panel-toggle',
     'promo-modal',
     'game-canvas',
+    'piece-tooltip',
   ];
   gameElementIds.forEach((id) => {
     const el = document.getElementById(id);

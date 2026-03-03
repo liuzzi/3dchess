@@ -1848,6 +1848,29 @@ html, body {
   background: rgba(255, 255, 255, 0.16);
 }
 
+/* ─── Tooltip ─── */
+#piece-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1000;
+  background: rgba(10, 10, 30, 0.3);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0e4ff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  text-transform: capitalize;
+  display: none;
+}
+
+#piece-tooltip.is-visible {
+  display: block;
+}
+
 /* ─── Responsive ─── */
 @media (max-width: 600px) {
   #game-frame {

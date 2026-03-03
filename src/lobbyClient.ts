@@ -46,6 +46,9 @@ export class LobbyClient {
   private defaultUrl(): string {
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    
+    // In production on Vercel, /lobby-ws is proxy-rewritten to PartyKit.
+    // Locally, Vite's proxy (configured in vite.config.ts) routes /lobby-ws to PartyKit.
     return `${proto}//${loc.host}/lobby-ws`;
   }
 
