@@ -282,6 +282,7 @@ function spawnShatterParticles(capturedPiece: Piece, pos: Position3D): void {
   const color = capturedPiece.color === PieceColor.White ? 0xdddddd : 0x222222;
 
   const particles: { mesh: THREE.Mesh; velocity: THREE.Vector3; rotationAxis: THREE.Vector3; rotationSpeed: number }[] = [];
+  const batchMeshes: THREE.Mesh[] = [];
 
   for (let i = 0; i < 30; i++) {
     const mat = new THREE.MeshStandardMaterial({
@@ -309,8 +310,11 @@ function spawnShatterParticles(capturedPiece: Piece, pos: Position3D): void {
     const rotationSpeed = Math.random() * 10;
 
     particles.push({ mesh, velocity, rotationAxis, rotationSpeed });
+    batchMeshes.push(mesh);
     shatterParticlesGroup.add(mesh);
   }
+
+  shatterBatches.push(batchMeshes);
 
   let lastTime = performance.now();
   const floorY = -1.5;
@@ -570,28 +574,34 @@ function queueHoverPreview(pos: Position3D | null): void {
 }
 
 let shatterParticlesGroup: THREE.Group | null = null;
+// Each entry is one capture's worth of meshes, in capture order
+const shatterBatches: THREE.Mesh[][] = [];
 
 function disposeCurrentGame(): void {
   if (renderer) renderer.dispose();
   if (interaction) interaction.dispose();
   if (ui) ui.dispose();
   if (game) game.removeAllListeners();
-  if (shatterParticlesGroup) {
-    clearShatterParticles();
-    shatterParticlesGroup = null;
+  clearAllShatterParticles();
+  shatterParticlesGroup = null;
+}
+
+function disposeMeshes(meshes: THREE.Mesh[]): void {
+  for (const mesh of meshes) {
+    shatterParticlesGroup?.remove(mesh);
+    mesh.geometry.dispose();
+    if (mesh.material instanceof THREE.Material) mesh.material.dispose();
   }
 }
 
-function clearShatterParticles(): void {
-  if (!shatterParticlesGroup) return;
-  while (shatterParticlesGroup.children.length > 0) {
-    const child = shatterParticlesGroup.children[0];
-    shatterParticlesGroup.remove(child);
-    if (child instanceof THREE.Mesh) {
-      child.geometry.dispose();
-      if (child.material instanceof THREE.Material) child.material.dispose();
-    }
-  }
+function clearAllShatterParticles(): void {
+  for (const batch of shatterBatches) disposeMeshes(batch);
+  shatterBatches.length = 0;
+}
+
+function clearLastShatterBatch(): void {
+  const batch = shatterBatches.pop();
+  if (batch) disposeMeshes(batch);
 }
 
 function initGame(mode: GameMode): void {
@@ -764,7 +774,7 @@ function initGame(mode: GameMode): void {
         boardView.clearHoverThreatLines();
         interaction.setHighlightedCells(new Set());
         interaction.setBoard(game.board);
-        clearShatterParticles();
+        clearAllShatterParticles();
         break;
       case 'undo': {
         interruptBotThinking();
@@ -782,7 +792,7 @@ function initGame(mode: GameMode): void {
         interaction.setHighlightedCells(new Set());
         interaction.setSelectedKey(null);
         interaction.setBoard(game.board);
-        clearShatterParticles();
+        clearLastShatterBatch();
 
         if (lastMove) {
           boardView.highlightLastMove(lastMove.from, lastMove.to);

@@ -32,19 +32,19 @@ const EG_VALUE: Record<PieceType, number> = {
 
 const TIME_LIMIT: Record<Difficulty, number> = {
   easy: 800,
-  medium: 1800,
+  medium: 2000,
   hard: 7500,
 };
 
 const MAX_DEPTH: Record<Difficulty, number> = {
   easy: 2,
-  medium: 4,
+  medium: 5,
   hard: 9,
 };
 
 const NOISE_AMPLITUDE: Record<Difficulty, number> = {
   easy: 120,
-  medium: 40,
+  medium: 20,
   hard: 0,
 };
 
@@ -1042,7 +1042,12 @@ function selectWithNoise(moves: ScoredMove[], noiseAmplitude: number): ScoredMov
   if (noiseAmplitude === 0 || moves.length <= 1) return moves[0];
   const bestRaw = moves[0].rawScore;
   const candidates = moves.filter(m => bestRaw - m.rawScore <= noiseAmplitude);
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  
+  // Use exponential weighting to heavily bias toward the best moves.
+  // Math.random() ^ 3 means a 60% chance to pick index 0, ~15% for index 1, etc.
+  // This prevents the "ADHD" effect of uniformly picking random moves from the candidate pool.
+  const index = Math.floor(Math.pow(Math.random(), 3) * candidates.length);
+  return candidates[index];
 }
 
 function iterativeSearch(
