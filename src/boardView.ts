@@ -35,6 +35,8 @@ export class BoardView {
 
   private baseStyles: Map<number, CellBase> = new Map();
   private frostingLevel: number = 0.02;
+  private selectionFloor: THREE.Mesh | null = null;
+  private static selectionFloorGeo = new THREE.PlaneGeometry(CELL_SIZE * 0.92, CELL_SIZE * 0.92);
 
   constructor() {
     this.group = new THREE.Group();
@@ -175,6 +177,8 @@ export class BoardView {
     if (this.selectedCell) {
       this.restoreCell(this.selectedCell);
     }
+    this.clearSelectionFloor();
+
     const key = posKey(pos);
     this.selectedCell = key;
     const mesh = this.cellMeshes.get(key);
@@ -190,6 +194,21 @@ export class BoardView {
       (line.material as THREE.LineDashedMaterial).color.set(0xffee44);
       (line.material as THREE.LineDashedMaterial).opacity = 0.9;
     }
+
+    const [wx, wy, wz] = boardToWorld(pos);
+    const floorMat = new THREE.MeshBasicMaterial({
+      color: 0xeebb44,
+      transparent: true,
+      opacity: 0.5,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const floor = new THREE.Mesh(BoardView.selectionFloorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(wx, wy - CELL_SIZE / 2 + 0.01, wz);
+    floor.renderOrder = 3;
+    this.group.add(floor);
+    this.selectionFloor = floor;
   }
 
   clearHighlights(): void {
@@ -200,6 +219,15 @@ export class BoardView {
     if (this.selectedCell) {
       this.restoreCell(this.selectedCell);
       this.selectedCell = null;
+    }
+    this.clearSelectionFloor();
+  }
+
+  private clearSelectionFloor(): void {
+    if (this.selectionFloor) {
+      (this.selectionFloor.material as THREE.Material).dispose();
+      this.group.remove(this.selectionFloor);
+      this.selectionFloor = null;
     }
   }
 

@@ -289,6 +289,16 @@ export class Game {
     this.gameOver = false;
     this.botThinking = false;
 
+    const currentSidePieces = this.board.getPiecesOfColor(this.currentTurn);
+    if (currentSidePieces.size <= 1) {
+      const onlyPiece = currentSidePieces.values().next().value as Piece | undefined;
+      if (!onlyPiece || onlyPiece.type === PieceType.King) {
+        this.gameOver = true;
+        this.emit({ type: 'checkmate', data: { loser: this.currentTurn } });
+        return;
+      }
+    }
+
     const inCheck = isKingInCheck(this.board, this.currentTurn);
 
     if (inCheck) {

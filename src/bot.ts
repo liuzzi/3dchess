@@ -133,7 +133,7 @@ export class Bot {
         let ordering = captureValue * 10 + threatValue * 3 + (givesCheck ? 800 : 0);
         if (openingPhase) {
           if (!wasPawn && wasUnmoved) ordering += 95;
-          if (wasPawn && !captured) ordering -= 40;
+          if (wasPawn && !captured && this.setup === 'classic') ordering -= 40;
           if ((piece.type === PieceType.Knight || piece.type === PieceType.Bishop) && wasUnmoved) ordering += 30;
         }
         all.push({

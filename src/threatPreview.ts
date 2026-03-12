@@ -103,19 +103,41 @@ export function computeHoverThreatPreview(
   try {
     const landedPiece = selectedPiece;
 
-    // Treat the hovered piece as enemy while scanning allied moves so legal capture
-    // generation can be reused to determine which allies protect this square.
+    // Show both:
+    // 1) who would defend the hovered square after this move
+    // 2) who the moved piece would protect from the hovered destination
     const protectionPairs: ThreatPair[] = [];
+    const seenPairs = new Set<string>();
+    const pushProtectionPair = (from: Position3D, to: Position3D): void => {
+      const key = `${from.x},${from.y},${from.z}->${to.x},${to.y},${to.z}`;
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      protectionPairs.push({ from: { ...from }, to: { ...to } });
+    };
+
     landedPiece.color = enemyColor;
     try {
       for (const protector of board.getPiecesOfColor(myColor)) {
         const moves = getValidMoves(board, protector);
         if (moves.some((m) => m.x === hoverPos.x && m.y === hoverPos.y && m.z === hoverPos.z)) {
-          protectionPairs.push({ from: { ...protector.position }, to: { ...hoverPos } });
+          pushProtectionPair(protector.position, hoverPos);
         }
       }
     } finally {
       landedPiece.color = myColor;
+    }
+
+    for (const ally of board.getPiecesOfColor(myColor)) {
+      if (ally === landedPiece) continue;
+      ally.color = enemyColor;
+      try {
+        const moves = getValidMoves(board, landedPiece);
+        if (moves.some((m) => m.x === ally.position.x && m.y === ally.position.y && m.z === ally.position.z)) {
+          pushProtectionPair(landedPiece.position, ally.position);
+        }
+      } finally {
+        ally.color = myColor;
+      }
     }
 
     return {

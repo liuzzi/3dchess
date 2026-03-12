@@ -38,12 +38,12 @@ const TIME_LIMIT: Record<Difficulty, number> = {
 
 const MAX_DEPTH: Record<Difficulty, number> = {
   easy: 2,
-  medium: 6,
-  hard: 9,
+  medium: 7,
+  hard: 10,
 };
 
 const NOISE_AMPLITUDE: Record<Difficulty, number> = {
-  easy: 120,
+  easy: 100,
   medium: 4,
   hard: 0,
 };
@@ -55,9 +55,11 @@ let searchDeadline = 0;
 let nodeLimit = Infinity;
 
 const NODE_LIMIT: Record<Difficulty, number> = {
-  easy: 160_000,
-  medium: 1_400_000,
-  hard: 1_800_000,
+  // 3D chess has ~150+ legal moves per position — the original 160k was too small for
+  // depth-2 to complete, causing easy mode to fall back to depth-1 and miss basic tactics.
+  easy: 900_000,
+  medium: 1_800_000,
+  hard: 2_400_000,
 };
 
 const MATE_SCORE = 1_000_000;
@@ -80,7 +82,7 @@ interface ScoredMove {
   fromPos: Position3D;
   to: Position3D;
   score: number;
-  rawScore: number;
+  isCapture?: boolean;
 }
 
 export interface RootMove {
@@ -106,7 +108,7 @@ interface TimeBudget {
 
 const NO_MOVE = -1;
 
-const TT_SIZE_BITS = 18;
+const TT_SIZE_BITS = 20;
 const TT_SIZE = 1 << TT_SIZE_BITS;
 const TT_MASK = TT_SIZE - 1;
 const TT_FIELDS = 5;
@@ -147,6 +149,19 @@ function ttGetBestMove(hashLow: number, hashHigh: number): number {
   return ttData[idx + 4];
 }
 
+// In-search repetition detection: track positions on the current search path.
+// Any node whose hash matches an ancestor returns 0 (draw) immediately.
+let pathDepth = 0;
+const pathLows = new Int32Array(256);
+const pathHighs = new Int32Array(256);
+
+function pathContains(low: number, high: number): boolean {
+  for (let i = 0; i < pathDepth; i++) {
+    if (pathLows[i] === low && pathHighs[i] === high) return true;
+  }
+  return false;
+}
+
 const MOVE_KEY_SIZE = 1 << 18;
 const historyData = new Int32Array(MOVE_KEY_SIZE);
 
@@ -167,58 +182,16 @@ function getOpponent(color: PieceColor): PieceColor {
   return color === PieceColor.White ? PieceColor.Black : PieceColor.White;
 }
 
-function legalAttackInfo(
-  board: Board,
-  attackerColor: PieceColor,
-  target: Position3D,
-): { count: number; cheapestValue: number } {
-  let count = 0;
-  let cheapestValue = Infinity;
-  const pieces = Array.from(board.getPiecesOfColor(attackerColor));
-  for (const p of pieces) {
-    let attacksTarget = false;
-    forEachAttackedSquare(board, p, (x, y, z) => {
-      if (!attacksTarget && x === target.x && y === target.y && z === target.z) attacksTarget = true;
-    });
-    if (!attacksTarget) continue;
-
-    const applied = board.applyMove(p, target);
-    const legal = !isKingInCheck(board, attackerColor);
-    board.unapplyMove(applied);
-    if (!legal) continue;
-
-    count++;
-    const v = PIECE_VALUE[p.type];
-    if (v < cheapestValue) cheapestValue = v;
-  }
-  return { count, cheapestValue };
-}
-
-function immediateBlunderPenalty(board: Board, movedPiece: Piece): number {
-  if (movedPiece.type === PieceType.King) return 0;
-  const pieceValue = PIECE_VALUE[movedPiece.type];
-  const enemy = getOpponent(movedPiece.color);
-
-  const enemyInfo = legalAttackInfo(board, enemy, movedPiece.position);
-  if (enemyInfo.count === 0) return 0;
-  const ownInfo = legalAttackInfo(board, movedPiece.color, movedPiece.position);
-
-  let penalty = 0;
-  if (ownInfo.count === 0) penalty += pieceValue * 1.05;
-  else if (enemyInfo.count > ownInfo.count) penalty += pieceValue * 0.55;
-
-  // If the square can be hit by a much cheaper attacker, that trade is usually bad.
-  if (enemyInfo.cheapestValue <= pieceValue * 0.6) penalty += pieceValue * 0.35;
-  if (movedPiece.type === PieceType.Queen || movedPiece.type === PieceType.Rook) penalty *= 1.2;
-
-  return Math.min(pieceValue * 1.6, penalty);
-}
 
 // 64-bit Zobrist hashing via two 32-bit integers
 let ZOBRIST_PIECES_LOW = new Int32Array(512 * 12);
 let ZOBRIST_PIECES_HIGH = new Int32Array(512 * 12);
 let ZOBRIST_BLACK_MOVE_LOW = 0;
 let ZOBRIST_BLACK_MOVE_HIGH = 0;
+// Extra Zobrist keys for the hasMoved flag — positions that look identical but
+// differ on pawn double-advance rights must hash differently to avoid TT corruption.
+let ZOBRIST_HAS_MOVED_LOW = new Int32Array(512);
+let ZOBRIST_HAS_MOVED_HIGH = new Int32Array(512);
 
 function initZobrist() {
   let seed = 1070372;
@@ -235,6 +208,10 @@ function initZobrist() {
   }
   ZOBRIST_BLACK_MOVE_LOW = random32();
   ZOBRIST_BLACK_MOVE_HIGH = random32();
+  for (let i = 0; i < 512; i++) {
+    ZOBRIST_HAS_MOVED_LOW[i] = random32();
+    ZOBRIST_HAS_MOVED_HIGH[i] = random32();
+  }
 }
 initZobrist();
 
@@ -263,17 +240,24 @@ function hashBoard(board: Board, toMove: PieceColor): Hash64 {
     const colorOffset = p.color === PieceColor.White ? 0 : 6;
     const pieceIndex = pType + colorOffset;
     const sq = posKey(p.position);
-    
+
     const index = sq * 12 + pieceIndex;
     low ^= ZOBRIST_PIECES_LOW[index];
     high ^= ZOBRIST_PIECES_HIGH[index];
+
+    // XOR in hasMoved so positions that differ only on pawn double-advance rights
+    // get distinct hashes and don't corrupt each other's TT entries.
+    if (p.hasMoved) {
+      low ^= ZOBRIST_HAS_MOVED_LOW[sq];
+      high ^= ZOBRIST_HAS_MOVED_HIGH[sq];
+    }
   }
 
   if (toMove === PieceColor.Black) {
     low ^= ZOBRIST_BLACK_MOVE_LOW;
     high ^= ZOBRIST_BLACK_MOVE_HIGH;
   }
-  
+
   return { low, high };
 }
 
@@ -294,7 +278,11 @@ function centerBonus(pos: Position3D): number {
 function progressBonus(piece: Piece): number {
   if (piece.type !== PieceType.Pawn) return 0;
   const progress = piece.color === PieceColor.White ? piece.position.y : (7 - piece.position.y);
-  return progress * 8;
+  // In 3D chess, advanced pawns on center layers (z=3,4) are harder to block and
+  // more dangerous — add a layer-proximity bonus that scales with advancement.
+  const layerCentrality = 1 - Math.abs(piece.position.z - 3.5) / 3.5;
+  const layerBonus = progress >= 3 ? layerCentrality * 8 : 0;
+  return progress * 8 + layerBonus;
 }
 
 function centrality(pos: Position3D): number {
@@ -399,19 +387,30 @@ function pieceActivity(mobility: number, piece: Piece): number {
 
 const evalWhiteAttacks = new Int32Array(512);
 const evalBlackAttacks = new Int32Array(512);
+// Minimum attacker value per square — lets the eval detect losing exchanges
+// (cheapest enemy attacker is cheaper than the piece) without a full SEE call.
+const evalWhiteAttackMin = new Int32Array(512);
+const evalBlackAttackMin = new Int32Array(512);
 
-function attackedAndDefendedCounts(
-  board: Board,
-): { white: Int32Array; black: Int32Array } {
+function attackedAndDefendedCounts(board: Board): {
+  white: Int32Array; black: Int32Array;
+  whiteMin: Int32Array; blackMin: Int32Array;
+} {
   evalWhiteAttacks.fill(0);
   evalBlackAttacks.fill(0);
+  evalWhiteAttackMin.fill(99999);
+  evalBlackAttackMin.fill(99999);
   for (const piece of board.pieces) {
     const targetMap = piece.color === PieceColor.White ? evalWhiteAttacks : evalBlackAttacks;
+    const minMap   = piece.color === PieceColor.White ? evalWhiteAttackMin : evalBlackAttackMin;
+    const pv = PIECE_VALUE[piece.type];
     forEachAttackedSquare(board, piece, (x, y, z) => {
-      targetMap[posKeyXYZ(x, y, z)]++;
+      const k = posKeyXYZ(x, y, z);
+      targetMap[k]++;
+      if (pv < minMap[k]) minMap[k] = pv;
     });
   }
-  return { white: evalWhiteAttacks, black: evalBlackAttacks };
+  return { white: evalWhiteAttacks, black: evalBlackAttacks, whiteMin: evalWhiteAttackMin, blackMin: evalBlackAttackMin };
 }
 
 const evalMoveCache = new Map<Piece, Position3D[]>();
@@ -450,45 +449,57 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
   eg += pawnStructureScore(board, botColor) * 0.8 - pawnStructureScore(board, opponentColor) * 0.8;
 
   const attacks = attackedAndDefendedCounts(board);
-  const botAttacks = botColor === PieceColor.White ? attacks.white : attacks.black;
-  const oppAttacks = botColor === PieceColor.White ? attacks.black : attacks.white;
+  const botAttacks    = botColor === PieceColor.White ? attacks.white    : attacks.black;
+  const oppAttacks    = botColor === PieceColor.White ? attacks.black    : attacks.white;
+  const botAttackMin  = botColor === PieceColor.White ? attacks.whiteMin : attacks.blackMin;
+  const oppAttackMin  = botColor === PieceColor.White ? attacks.blackMin : attacks.whiteMin;
 
   for (const piece of board.pieces) {
     if (piece.type === PieceType.King) continue;
     const key = posKey(piece.position);
-    const attackedByOpp = piece.color === botColor
-      ? oppAttacks[key]
-      : botAttacks[key];
+    const pv  = PIECE_VALUE[piece.type];
+
+    const attackedByOpp = piece.color === botColor ? oppAttacks[key]   : botAttacks[key];
     if (attackedByOpp === 0) continue;
 
-    const defendedByOwn = piece.color === botColor
-      ? botAttacks[key]
-      : oppAttacks[key];
-    // Penalize hanging/overloaded pieces at near-material scale to avoid
-    // "win a pawn, lose a rook/queen" blunders when search gets noisy/pruned.
-    const hangingPenalty = Math.min(
-      PIECE_VALUE[piece.type] * 1.05,
-      PIECE_VALUE[piece.type] * 0.72 + attackedByOpp * 36,
-    );
-    const overloadedPenalty = Math.min(
-      PIECE_VALUE[piece.type] * 0.22,
-      attackedByOpp * 16,
-    );
+    const defendedByOwn    = piece.color === botColor ? botAttacks[key]   : oppAttacks[key];
+    const cheapestAttacker = piece.color === botColor ? oppAttackMin[key] : botAttackMin[key];
+    const cheapestDefender = piece.color === botColor ? botAttackMin[key] : oppAttackMin[key];
+
+    // Truly hanging — no defender at all.
+    const hangingPenalty = Math.min(pv * 1.05, pv * 0.72 + attackedByOpp * 36);
+
+    // Overloaded — more attackers than defenders (count-based, catches piled-on pieces).
+    const overloadedPenalty = Math.min(pv * 0.22, attackedByOpp * 16);
+
+    // Losing exchange — if the cheapest attacker is worth less than this piece, the
+    // opponent profits by capturing (they gain pv, lose cheapestAttacker). Scale the
+    // penalty down when we have multiple defenders (harder to exploit).
+    const exchangeLossPenalty = (cheapestAttacker < pv)
+      ? Math.min((pv - cheapestAttacker) * 0.70, pv * 0.50) * Math.max(0.3, 1 - (defendedByOwn - 1) * 0.25)
+      : 0;
+
+    let penalty = 0;
     if (defendedByOwn === 0) {
+      penalty = hangingPenalty;
+    } else {
+      if (attackedByOpp > defendedByOwn) penalty += overloadedPenalty;
+      if (exchangeLossPenalty > 0) penalty += exchangeLossPenalty;
+    }
+
+    if (penalty > 0) {
       if (piece.color === botColor) {
-        mg -= hangingPenalty;
-        eg -= hangingPenalty * 0.85;
+        mg -= penalty;
+        eg -= penalty * 0.85;
       } else {
-        mg += hangingPenalty;
-        eg += hangingPenalty * 0.85;
-      }
-    } else if (attackedByOpp > defendedByOwn) {
-      if (piece.color === botColor) {
-        mg -= overloadedPenalty;
-        eg -= overloadedPenalty * 0.8;
-      } else {
-        mg += overloadedPenalty;
-        eg += overloadedPenalty * 0.8;
+        // Opponent's hanging/attacked pieces: use a fraction of the penalty as a positional
+        // bonus. The full penalty value would over-inflate non-capture positions, making them
+        // appear nearly as good as the actual capture — which brings them within the noise
+        // window and causes the bot to occasionally miss obvious free captures.
+        // The search itself evaluates captures directly, so a small hint is sufficient.
+        const oppBonus = penalty * 0.20;
+        mg += oppBonus;
+        eg += oppBonus * 0.85;
       }
     }
   }
@@ -615,7 +626,9 @@ function orderMoves(
         // Opening guidance: develop pieces first when tactical urgency is low.
         if (openingPhase) {
           if (!wasPawn && wasUnmoved) score += 95;
-          if (wasPawn && !move.captured) score -= 40;
+          // Only discourage quiet pawn pushes in classic — barricade/pawnWall setups
+          // deliberately advance pawns as their primary strategy.
+          if (wasPawn && !move.captured && activeSetup === 'classic') score -= 40;
           if ((move.piece.type === PieceType.Knight || move.piece.type === PieceType.Bishop) && wasUnmoved) score += 30;
         }
       } finally {
@@ -830,6 +843,10 @@ function negamax(
   const betaOrig = beta;
   const h = hashBoard(board, toMove);
 
+  // In-search repetition: if this position has already appeared on the current path,
+  // score it as a draw (0) — prevents cycling and values avoid-repetition moves correctly.
+  if (ply > 0 && pathContains(h.low, h.high)) return 0;
+
   const tt = ttProbe(h.low, h.high, depth);
   if (tt && tt.depth >= depth) {
     if (tt.flag === TT_FLAG_EXACT) return tt.score;
@@ -905,62 +922,44 @@ function negamax(
   let best = -Infinity;
   let bestMoveKey = NO_MOVE;
 
-  for (let moveIndex = 0; moveIndex < ordered.length; moveIndex++) {
-    const move = ordered[moveIndex];
-    let score: number;
-    const applied = board.applyMove(move.piece, move.to);
-    try {
-      autoPromoteToQueen(move.piece);
-      const givesCheck = isKingInCheck(board, getOpponent(toMove));
-      const isRecapture = move.captured !== undefined && lastCaptureSquare !== undefined && posKey(move.to) === lastCaptureSquare;
-      const canCheckExtend = givesCheck && checkExtBudget > 0;
-      const canRecaptureExtend = isRecapture && recaptureExtBudget > 0;
-      const extension = canCheckExtend || canRecaptureExtend ? 1 : 0;
-      const nextDepth = depth - 1 + extension;
-      const createsMajorThreat = !move.captured
-        && maxThreatenedEnemyValueByPiece(board, move.piece) >= PIECE_VALUE[PieceType.Rook];
-      const isQuiet = !move.captured && promotionScore(move) === 0 && !givesCheck && !createsMajorThreat;
-      
-      const historyVal = historyScore(move);
-      const isPoorHistory = historyVal < 0;
-      
-      const canReduce = nextDepth >= 3 && moveIndex >= 3 && isQuiet && !inCheck;
-      let reduction = 0;
-      if (canReduce) {
-        if (moveIndex >= 8) reduction = 2;
-        else reduction = 1;
-        if (isPoorHistory) reduction++;
-      }
-      const reducedDepth = Math.max(0, nextDepth - reduction);
+  // Push current position onto the path before exploring children so that any
+  // descendant that reaches this same position is detected as a repetition.
+  if (pathDepth < 256) {
+    pathLows[pathDepth]  = h.low;
+    pathHighs[pathDepth] = h.high;
+  }
+  pathDepth++;
 
-      if (moveIndex === 0) {
-        score = -negamax(
-          board,
-          nextDepth,
-          -beta,
-          -alpha,
-          getOpponent(toMove),
-          botColor,
-          ply + 1,
-          move.captured ? posKey(move.to) : undefined,
-          checkExtBudget - (canCheckExtend ? 1 : 0),
-          recaptureExtBudget - (canRecaptureExtend ? 1 : 0),
-        );
-      } else {
-        score = -negamax(
-          board,
-          reducedDepth,
-          -alpha - 1,
-          -alpha,
-          getOpponent(toMove),
-          botColor,
-          ply + 1,
-          move.captured ? posKey(move.to) : undefined,
-          checkExtBudget - (canCheckExtend ? 1 : 0),
-          recaptureExtBudget - (canRecaptureExtend ? 1 : 0),
-        );
+  try {
+    for (let moveIndex = 0; moveIndex < ordered.length; moveIndex++) {
+      const move = ordered[moveIndex];
+      let score: number;
+      const applied = board.applyMove(move.piece, move.to);
+      try {
+        autoPromoteToQueen(move.piece);
+        const givesCheck = isKingInCheck(board, getOpponent(toMove));
+        const isRecapture = move.captured !== undefined && lastCaptureSquare !== undefined && posKey(move.to) === lastCaptureSquare;
+        const canCheckExtend = givesCheck && checkExtBudget > 0;
+        const canRecaptureExtend = isRecapture && recaptureExtBudget > 0;
+        const extension = canCheckExtend || canRecaptureExtend ? 1 : 0;
+        const nextDepth = depth - 1 + extension;
+        const createsMajorThreat = !move.captured
+          && maxThreatenedEnemyValueByPiece(board, move.piece) >= PIECE_VALUE[PieceType.Rook];
+        const isQuiet = !move.captured && promotionScore(move) === 0 && !givesCheck && !createsMajorThreat;
 
-        if (score > alpha) {
+        const historyVal = historyScore(move);
+        const isPoorHistory = historyVal < 0;
+
+        const canReduce = nextDepth >= 3 && moveIndex >= 3 && isQuiet && !inCheck;
+        let reduction = 0;
+        if (canReduce) {
+          if (moveIndex >= 8) reduction = 2;
+          else reduction = 1;
+          if (isPoorHistory) reduction++;
+        }
+        const reducedDepth = Math.max(0, nextDepth - reduction);
+
+        if (moveIndex === 0) {
           score = -negamax(
             board,
             nextDepth,
@@ -973,21 +972,51 @@ function negamax(
             checkExtBudget - (canCheckExtend ? 1 : 0),
             recaptureExtBudget - (canRecaptureExtend ? 1 : 0),
           );
-        }
-      }
-    } finally {
-      board.unapplyMove(applied);
-    }
+        } else {
+          score = -negamax(
+            board,
+            reducedDepth,
+            -alpha - 1,
+            -alpha,
+            getOpponent(toMove),
+            botColor,
+            ply + 1,
+            move.captured ? posKey(move.to) : undefined,
+            checkExtBudget - (canCheckExtend ? 1 : 0),
+            recaptureExtBudget - (canRecaptureExtend ? 1 : 0),
+          );
 
-    if (score > best) {
-      best = score;
-      bestMoveKey = moveKeyNum(move.piece.position, move.to);
+          if (score > alpha) {
+            score = -negamax(
+              board,
+              nextDepth,
+              -beta,
+              -alpha,
+              getOpponent(toMove),
+              botColor,
+              ply + 1,
+              move.captured ? posKey(move.to) : undefined,
+              checkExtBudget - (canCheckExtend ? 1 : 0),
+              recaptureExtBudget - (canRecaptureExtend ? 1 : 0),
+            );
+          }
+        }
+      } finally {
+        board.unapplyMove(applied);
+      }
+
+      if (score > best) {
+        best = score;
+        bestMoveKey = moveKeyNum(move.piece.position, move.to);
+      }
+      if (score > alpha) alpha = score;
+      if (alpha >= beta) {
+        registerCutoff(move, ply, depth);
+        break;
+      }
     }
-    if (score > alpha) alpha = score;
-    if (alpha >= beta) {
-      registerCutoff(move, ply, depth);
-      break;
-    }
+  } finally {
+    pathDepth--;
   }
 
   const flag = best <= alphaOrig ? TT_FLAG_ALPHA : best >= betaOrig ? TT_FLAG_BETA : TT_FLAG_EXACT;
@@ -1005,6 +1034,9 @@ function searchAtDepth(
   onRootMoveScored?: (result: DepthResult) => void,
   pvMoveKey?: number,
 ): ScoredMove[] {
+  // Reset path so each depth iteration starts with a clean repetition history.
+  pathDepth = 0;
+
   const moves = rootMoves ?? getAllMoves(board, color);
   if (moves.length === 0) throw new Error('Bot has no legal moves');
 
@@ -1013,13 +1045,11 @@ function searchAtDepth(
   let alpha = rootAlpha;
 
   for (const move of ordered) {
-    let rawScore: number;
-    let safetyPenalty = 0;
+    let score: number;
     const applied = board.applyMove(move.piece, move.to);
     try {
       autoPromoteToQueen(move.piece);
-      rawScore = -negamax(board, depth - 1, -rootBeta, -alpha, getOpponent(color), color, 1);
-      safetyPenalty = immediateBlunderPenalty(board, move.piece);
+      score = -negamax(board, depth - 1, -rootBeta, -alpha, getOpponent(color), color, 1);
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (scored.length > 0) break;
@@ -1029,11 +1059,9 @@ function searchAtDepth(
       board.unapplyMove(applied);
     }
 
-    const safetyScale = activeDifficulty === 'medium' ? 1.0 : activeDifficulty === 'easy' ? 0.7 : 0.4;
-    const adjustedScore = rawScore - safetyPenalty * safetyScale;
-    scored.push({ fromPos: move.piece.position, to: move.to, score: adjustedScore, rawScore });
-    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: adjustedScore });
-    if (adjustedScore > alpha) alpha = adjustedScore;
+    scored.push({ fromPos: move.piece.position, to: move.to, score, isCapture: !!move.captured });
+    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score });
+    if (score > alpha) alpha = score;
     if (alpha >= rootBeta) break;
   }
 
@@ -1106,6 +1134,7 @@ function computeAdaptiveTimeLimit(board: Board, color: PieceColor, difficulty: D
   if (totalPieces <= 14) factor += 0.2;
 
   const raw = Math.round(base * factor);
+  if (difficulty === 'easy')   return Math.max(600,  Math.min(raw, 1500));
   if (difficulty === 'medium') return Math.max(2600, Math.min(raw, 6200));
   return Math.max(3500, Math.min(raw, 12000));
 }
@@ -1162,12 +1191,17 @@ function resolveRootMoves(
 
 function selectWithNoise(moves: ScoredMove[], noiseAmplitude: number): ScoredMove {
   if (noiseAmplitude === 0 || moves.length <= 1) return moves[0];
-  const bestRaw = moves[0].rawScore;
-  const candidates = moves.filter(m => bestRaw - m.rawScore <= noiseAmplitude);
-  
-  // Use exponential weighting to heavily bias toward the best moves.
-  // Math.random() ^ 3 means a 60% chance to pick index 0, ~15% for index 1, etc.
-  // This prevents the "ADHD" effect of uniformly picking random moves from the candidate pool.
+  const best = moves[0].score;
+  let candidates = moves.filter(m => best - m.score <= noiseAmplitude);
+
+  // Never let noise pick a quiet move over a capture. If any candidate is a
+  // capture, restrict the pool to captures only so the bot doesn't randomly
+  // skip taking free material.
+  const captureExists = candidates.some(m => m.isCapture);
+  if (captureExists) candidates = candidates.filter(m => m.isCapture);
+
+  // Exponential weighting heavily biases toward the top candidate (~60% chance
+  // for index 0, ~15% for index 1, etc.) — avoids fully-random bad moves.
   const index = Math.floor(Math.pow(Math.random(), 3) * candidates.length);
   return candidates[index];
 }
@@ -1236,7 +1270,7 @@ function iterativeSearch(
             emitDetailedProgress,
             pvMoveKey,
           );
-          const currentBest = result[0].rawScore;
+          const currentBest = result[0].score;
           if (currentBest > alpha && currentBest < beta) break;
           window = Math.min(ASPIRATION_MAX, window * 2);
           if (window >= ASPIRATION_MAX) {
@@ -1269,28 +1303,28 @@ function iterativeSearch(
       const best = result[0];
       completedDepth = depth;
       const rootHash = hashBoard(board, color);
-      ttStore(rootHash.low, rootHash.high, depth, best.rawScore, TT_FLAG_EXACT, moveKeyNum(best.fromPos, best.to));
+      ttStore(rootHash.low, rootHash.high, depth, best.score, TT_FLAG_EXACT, moveKeyNum(best.fromPos, best.to));
       const depthResult: DepthResult = {
         depth,
         fromPos: best.fromPos,
         to: best.to,
-        score: best.rawScore,
+        score: best.score,
         pvLine: buildDepthPvLine(board, color, best, 6),
         pvCandidates: result
           .slice(0, 3)
-          .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 6), score: m.rawScore })),
+          .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 6), score: m.score })),
       };
       depthResults.push(depthResult);
       onProgress?.('depth', depthResult);
       pvMoveKey = moveKeyNum(best.fromPos, best.to);
-      previousScore = best.rawScore;
+      previousScore = best.score;
 
       if (budget.softMs > 0) {
         const elapsed = performance.now() - searchStart;
         const unstable = depthResults.length >= 2
           ? Math.abs(depthResults[depthResults.length - 1].score - depthResults[depthResults.length - 2].score) > 140
           : false;
-        const minDepthBeforeSoftStop = difficulty === 'medium' ? 5 : 4;
+        const minDepthBeforeSoftStop = difficulty === 'medium' ? 6 : difficulty === 'hard' ? 5 : 2;
         if (elapsed >= budget.softMs && !unstable && depth >= minDepthBeforeSoftStop) break;
       }
     } catch (e) {
@@ -1302,11 +1336,11 @@ function iterativeSearch(
             depth: 1,
             fromPos: bestResult[0].fromPos,
             to: bestResult[0].to,
-            score: bestResult[0].rawScore,
+            score: bestResult[0].score,
             pvLine: buildDepthPvLine(board, color, bestResult[0], 4),
             pvCandidates: bestResult
               .slice(0, 3)
-              .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 4), score: m.rawScore })),
+              .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 4), score: m.score })),
           };
           depthResults.push(depthResult);
           onProgress?.('depth', depthResult);
@@ -1397,7 +1431,7 @@ if (typeof self !== 'undefined') {
         type: 'result',
         fromPos: result.best.fromPos,
         to: result.best.to,
-        score: result.best.rawScore,
+        score: result.best.score,
         completedDepth: result.completedDepth,
         depthResults: result.depthResults,
       };

@@ -54,21 +54,29 @@ export async function loadModels(): Promise<void> {
 
   const promises = pieces.map(async (type) => {
     try {
-      const [high, med, low] = await Promise.all([
-        loadPromise(`/models/${type}_high.glb`),
-        loadPromise(`/models/${type}_med.glb`),
-        loadPromise(`/models/${type}_low.glb`),
-      ]);
-
+      // Default to the new simple model set when available.
+      const simple = await loadPromise(`/models/${type}_simple.glb`);
       const lod = new THREE.LOD();
-      // Distance thresholds for zooming
-      lod.addLevel(high, 0);
-      lod.addLevel(med, 12);
-      lod.addLevel(low, 22);
-
+      lod.addLevel(simple, 0);
       modelScenes.set(type, lod);
     } catch (e) {
-      console.error(`Failed to load LOD models for ${type}:`, e);
+      try {
+        const [high, med, low] = await Promise.all([
+          loadPromise(`/models/${type}_high.glb`),
+          loadPromise(`/models/${type}_med.glb`),
+          loadPromise(`/models/${type}_low.glb`),
+        ]);
+
+        const lod = new THREE.LOD();
+        // Distance thresholds for zooming
+        lod.addLevel(high, 0);
+        lod.addLevel(med, 12);
+        lod.addLevel(low, 22);
+
+        modelScenes.set(type, lod);
+      } catch (lodError) {
+        console.error(`Failed to load models for ${type}:`, lodError);
+      }
     }
   });
 

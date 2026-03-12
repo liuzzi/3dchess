@@ -9,11 +9,11 @@ const PIECE_SCALE = 0.35;
 const ORB_HOVER_COLOR = 0xffea77;
 const ORB_SELECTED_COLOR = 0xffbb00;
 const CUSTOM_MODEL_FILL = 0.85;
+const PIECE_BASE_Y_OFFSET = -0.5;
 const CUSTOM_MODEL_SCALE_BY_TYPE: Partial<Record<PieceType, number>> = {
-  [PieceType.Knight]: 1.5,
-};
-const CUSTOM_MODEL_Y_OFFSET_BY_TYPE: Partial<Record<PieceType, number>> = {
-  [PieceType.Knight]: 0.0,
+  [PieceType.Knight]: 0.8,
+  [PieceType.Rook]: 0.8,
+  [PieceType.Pawn]: 0.7,
 };
 
 export class PieceView {
@@ -95,7 +95,7 @@ export class PieceView {
         this.hitTargetListDirty = true;
       }
       const [wx, wy, wz] = boardToWorld(piece.position);
-      mesh.position.set(wx, wy, wz);
+      mesh.position.set(wx, wy + PIECE_BASE_Y_OFFSET, wz);
     }
   }
 
@@ -142,7 +142,6 @@ export class PieceView {
         }
       });
       
-      clone.position.y += CUSTOM_MODEL_Y_OFFSET_BY_TYPE[piece.type] ?? 0;
       if (!isWhite) clone.rotation.y = Math.PI;
       group.add(clone);
     } else {
@@ -215,11 +214,7 @@ export class PieceView {
         }
       }
 
-      addPart(mainGeo, (mesh) => {
-        if (height === 0) {
-          mesh.position.y += CUSTOM_MODEL_Y_OFFSET_BY_TYPE[piece.type] ?? 0;
-        }
-      });
+      addPart(mainGeo);
 
       // Base disc (only for fallback primitives)
       if (height > 0) {
@@ -235,6 +230,7 @@ export class PieceView {
       ? (PIECE_SCALE / 0.35) * CUSTOM_MODEL_FILL * customScaleBoost
       : (PIECE_SCALE / 0.35);
     group.scale.setScalar(finalScale);
+    this.groundGroupToBase(group);
 
     group.renderOrder = 5;
     group.userData = { piece, key: posKey(piece.position) };
@@ -242,6 +238,17 @@ export class PieceView {
     this.addHitTarget(group, piece);
 
     return group;
+  }
+
+  private groundGroupToBase(group: THREE.Group): void {
+    const bounds = new THREE.Box3().setFromObject(group);
+    if (!Number.isFinite(bounds.min.y) || !Number.isFinite(bounds.max.y)) return;
+    const scale = group.scale.y || 1;
+    const yShift = -bounds.min.y / scale;
+    if (Math.abs(yShift) < 1e-6) return;
+    for (const child of group.children) {
+      child.position.y += yShift;
+    }
   }
 
   rebuildPiece(piece: Piece): void {
@@ -255,7 +262,7 @@ export class PieceView {
     }
     const mesh = this.createPieceMesh(piece);
     const [wx, wy, wz] = boardToWorld(piece.position);
-    mesh.position.set(wx, wy, wz);
+    mesh.position.set(wx, wy + PIECE_BASE_Y_OFFSET, wz);
     this.group.add(mesh);
     this.meshes.set(piece, mesh);
     this.meshListDirty = true;

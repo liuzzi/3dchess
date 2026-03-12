@@ -19,6 +19,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "^4.3.0",
     "@types/http-proxy": "^1.17.17",
     "@types/three": "^0.182.0",
     "http-proxy": "^1.18.1",

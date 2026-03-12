@@ -99,6 +99,7 @@ function updateHighlightedMoves() {
 const MOVE_STEP_MS = 500;
 const IMPACT_BURST_MS = 260;
 const CELL_ENTRY_T = 0.5;
+const PIECE_BASE_Y_OFFSET = -0.5;
 const EASY_BOT_MIN_THINK_MS = 2000;
 const EASY_BOT_MAX_THINK_MS = 3000;
 const AI_FX_DEV_DIAGNOSTICS =
@@ -462,7 +463,7 @@ async function animateMoveSteps(
   const path = buildStepPath(from, to);
   const worldPath = [from, ...path].map((p) => {
     const [x, y, z] = boardToWorld(p);
-    return new THREE.Vector3(x, y, z);
+    return new THREE.Vector3(x, y + PIECE_BASE_Y_OFFSET, z);
   });
 
   mesh.position.copy(worldPath[0]);
