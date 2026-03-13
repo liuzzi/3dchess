@@ -8,7 +8,7 @@ import { Bot } from './bot';
 import type { WorkerResponse } from './botWorker';
 import { Network } from './network';
 import * as THREE from 'three';
-import { Piece, PieceColor, PieceType, Position3D, posKey, GameMode, SetupMode, Difficulty, boardToWorld } from './types';
+import { Piece, PieceColor, PieceType, Position3D, posKey, posEqual, GameMode, SetupMode, Difficulty, boardToWorld } from './types';
 import { getLegalMoves, isKingInCheck } from './movement';
 import { playAiThinkTick, playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
@@ -52,6 +52,86 @@ let lastAiFxBeepAt = 0;
 let aiThinkingDepthArrowHoldUntil = 0;
 let isCtrlPressed = false;
 let gameStatusEl: HTMLElement | null = null;
+let pendingMobileConfirmPos: Position3D | null = null;
+let mobilePreviewOriginalWorldPos: THREE.Vector3 | null = null;
+let mobilePreviewCapturedMesh: THREE.Group | null = null;
+let mobilePreviewPiece: Piece | null = null;
+
+const MOBILE_WIDTH_THRESHOLD = 768;
+
+function isMobileScreen(): boolean {
+  return window.innerWidth <= MOBILE_WIDTH_THRESHOLD;
+}
+
+function showMobileConfirmPreview(piece: Piece, targetPos: Position3D): void {
+  pendingMobileConfirmPos = targetPos;
+  mobilePreviewPiece = piece;
+
+  const mesh = pieceView.getMeshForPiece(piece);
+  if (mesh) {
+    mobilePreviewOriginalWorldPos = mesh.position.clone();
+    const [wx, wy, wz] = boardToWorld(targetPos);
+    mesh.position.set(wx, wy, wz);
+  }
+
+  const capturedPiece = game.board.getPieceAt(targetPos);
+  if (capturedPiece && capturedPiece.color !== piece.color) {
+    const capturedMesh = pieceView.getMeshForPiece(capturedPiece);
+    if (capturedMesh) {
+      mobilePreviewCapturedMesh = capturedMesh;
+      capturedMesh.visible = false;
+    }
+  }
+
+  boardView.clearHighlights();
+  boardView.clearThreatLines();
+  boardView.clearDangerPreviewLines();
+  boardView.clearHoverProtectionLines();
+  boardView.clearHoverThreatLines();
+  boardView.highlightLastMove(piece.position, targetPos);
+
+  const preview = computeHoverThreatPreview(game.board, piece, targetPos);
+  if (preview) {
+    boardView.showThreatLines(preview.dangerPairs);
+    boardView.showHoverThreatLines(preview.threatPairs);
+    if (showProtectedActive) {
+      boardView.showHoverProtectionLines(preview.protectionPairs);
+    }
+  }
+
+  interaction.setHighlightedCells(new Set());
+
+  const el = document.getElementById('mobile-move-confirm');
+  if (el) el.classList.add('is-visible');
+}
+
+function revertMobilePreview(): void {
+  if (mobilePreviewPiece && mobilePreviewOriginalWorldPos) {
+    const mesh = pieceView.getMeshForPiece(mobilePreviewPiece);
+    if (mesh) {
+      mesh.position.copy(mobilePreviewOriginalWorldPos);
+    }
+  }
+
+  if (mobilePreviewCapturedMesh) {
+    mobilePreviewCapturedMesh.visible = true;
+  }
+
+  mobilePreviewOriginalWorldPos = null;
+  mobilePreviewCapturedMesh = null;
+  mobilePreviewPiece = null;
+}
+
+function hideMobileConfirm(): void {
+  if (pendingMobileConfirmPos) {
+    revertMobilePreview();
+    boardView.clearLastMove();
+    recalcThreatVisuals();
+  }
+  pendingMobileConfirmPos = null;
+  const el = document.getElementById('mobile-move-confirm');
+  if (el) el.classList.remove('is-visible');
+}
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Control' && !isCtrlPressed) {
@@ -587,6 +667,7 @@ function recalcMyThreats(): void {
 }
 
 function queueHoverPreview(pos: Position3D | null): void {
+  if (pendingMobileConfirmPos) return;
   queuedHoverPos = pos;
   if (!game.selectedPiece) {
     if (hoverPreviewTimerId !== null) {
@@ -746,10 +827,43 @@ function initGame(mode: GameMode): void {
 
   interaction.setClickHandler((pos: Position3D) => {
     if (isAnimatingMove) return;
+
+    if (isMobileScreen() && game.selectedPiece) {
+      const clickedPiece = game.board.getPieceAt(pos);
+      const isOwnPiece = clickedPiece && clickedPiece.color === game.currentTurn;
+      const isValidTarget = game.validMoves.some(m => posEqual(m, pos));
+
+      if (!isOwnPiece && isValidTarget) {
+        if (pendingMobileConfirmPos && posEqual(pendingMobileConfirmPos, pos)) {
+          return;
+        }
+        hideMobileConfirm();
+        showMobileConfirmPreview(game.selectedPiece, pos);
+        return;
+      }
+    }
+
+    hideMobileConfirm();
     game.handleCellClick(pos);
   });
 
   interaction.setDeselectHandler(() => {
+    hideMobileConfirm();
+    game.deselect();
+  });
+
+  const mobileConfirmYes = document.getElementById('mobile-confirm-yes');
+  const mobileConfirmNo = document.getElementById('mobile-confirm-no');
+  mobileConfirmYes?.addEventListener('click', () => {
+    const pos = pendingMobileConfirmPos;
+    revertMobilePreview();
+    pendingMobileConfirmPos = null;
+    const el = document.getElementById('mobile-move-confirm');
+    if (el) el.classList.remove('is-visible');
+    if (pos) game.handleCellClick(pos);
+  });
+  mobileConfirmNo?.addEventListener('click', () => {
+    hideMobileConfirm();
     game.deselect();
   });
 
@@ -793,6 +907,7 @@ function initGame(mode: GameMode): void {
   game.on((event) => {
     switch (event.type) {
       case 'select': {
+        hideMobileConfirm();
         hoverPreviewTargetKey = null;
         boardView.clearHoverProtectionLines();
         updateHighlightedMoves();
@@ -800,6 +915,7 @@ function initGame(mode: GameMode): void {
         break;
       }
       case 'deselect':
+        hideMobileConfirm();
         hoverPreviewTargetKey = null;
         boardView.clearHighlights();
         boardView.clearHoverThreatLines();
