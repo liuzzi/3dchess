@@ -2,6 +2,11 @@
  * Content page script: nav toggle and background parallax.
  */
 
+if ('scrollRestoration' in history) {
+  history.scrollRestoration = 'manual';
+}
+window.scrollTo(0, 0);
+
 const navToggle = document.getElementById('site-nav-toggle');
 const navLinks = document.querySelector('.site-nav-links');
 

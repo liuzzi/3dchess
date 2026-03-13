@@ -3,23 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>Play Chess Online in 3D – Free Browser Chess Game | 8x8x8</title>
-  <meta name="description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board. No download required." />
-  <link rel="canonical" href="https://3dchess.org/play-chess-online/" />
+  <title>Play Chess Online in 3D – Free Browser Chess Game | chess³ᵈ</title>
+  <meta name="description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board. No download required. Free." />
+  <link rel="canonical" href="https://chess3d.co/play-chess-online/" />
 
   <!-- Open Graph -->
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Play Chess Online in 3D – Free Browser Chess Game" />
-  <meta property="og:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board." />
-  <meta property="og:url" content="https://3dchess.org/play-chess-online/" />
-  <meta property="og:image" content="https://3dchess.org/images/og-chess-3d.png" />
-  <meta property="og:site_name" content="8x8x8" />
+  <meta property="og:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board. No download required. Free." />
+  <meta property="og:url" content="https://chess3d.co/play-chess-online/" />
+  <meta property="og:image" content="https://chess3d.co/images/og-chess-3d.png" />
+  <meta property="og:site_name" content="chess³ᵈ" />
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Play Chess Online in 3D – Free Browser Chess Game" />
-  <meta name="twitter:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board." />
-  <meta name="twitter:image" content="https://3dchess.org/images/og-chess-3d.png" />
+  <meta name="twitter:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board. No download required. Free." />
+  <meta name="twitter:image" content="https://chess3d.co/images/og-chess-3d.png" />
 
   <meta name="theme-color" content="#0a0a1a" />
 
@@ -28,15 +28,15 @@
   {
     "@context": "https://schema.org",
     "@type": "VideoGame",
-    "name": "8x8x8",
-    "url": "https://3dchess.org/play-chess-online/",
+    "name": "chess³ᵈ",
+    "url": "https://chess3d.co/play-chess-online/",
     "description": "Play chess online in 3D. Challenge AI or play multiplayer on a fully interactive 3D board.",
     "applicationCategory": "Game",
     "operatingSystem": "Web",
     "gamePlatform": "Web Browser",
     "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 1, "maxValue": 2 },
     "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-    "author": { "@type": "Organization", "name": "8x8x8", "url": "https://3dchess.org" }
+    "author": { "@type": "Organization", "name": "chess³ᵈ", "url": "https://chess3d.co" }
   }
   </script>
 
@@ -49,11 +49,12 @@
 <body>
   <!-- Site Navigation -->
   <nav id="site-nav">
-    <a href="/" class="site-nav-logo">8x8x8</a>
+    <a href="/" class="site-nav-logo"><span class="nav-logo-text">chess</span><sup>3d</sup></a>
     <button id="site-nav-toggle" type="button" aria-label="Toggle navigation">&#9776;</button>
     <div class="site-nav-links">
       <a href="/play-chess-online/" class="site-nav-active">Play Online</a>
       <a href="/play-chess-vs-computer/">vs Computer</a>
+      <a href="/how-to-play-chess/">How to Play</a>
       <a href="/chess-rules/">Rules</a>
       <a href="/chess-openings/">Openings</a>
       <a href="/chess-puzzles/">Puzzles</a>
@@ -67,7 +68,7 @@
       <div class="menu-bg-layer menu-bg-layer-3" data-depth="1.45"></div>
     </div>
     <div id="menu-inner">
-      <h1 id="menu-title">8x8x8</h1>
+      <h1 id="menu-title">chess<sup>3d</sup></h1>
       <p id="menu-subtitle">chess reimagined</p>
       <div id="menu-cubes">
         <button class="cube-wrapper mode-bot" data-mode="bot" type="button" aria-label="Play versus Bot">
@@ -186,7 +187,7 @@
     </div>
   </div>
   <div id="game-frame" class="game-hidden">
-    <button id="game-home-btn" type="button" aria-label="Return to main menu">8x8x8</button>
+    <button id="game-home-btn" type="button" aria-label="Return to main menu"><span class="nav-logo-text">chess</span><sup>3d</sup></button>
   </div>
   <div id="ui-overlay" class="game-hidden">
     <div id="top-bar">
@@ -230,28 +231,28 @@
         <div id="captured-black" class="captured-row"></div>
       </div>
     </div>
-    <button
-      id="side-panel-toggle"
-      class="panel-toggle-btn panel-toggle-btn-right game-hidden"
-      type="button"
-      aria-label="Hide side panel"
-      aria-controls="side-panel"
-      aria-expanded="true"
-    >&gt;</button>
   </div>
+  <button
+    id="side-panel-toggle"
+    class="panel-toggle-btn panel-toggle-btn-right game-hidden"
+    type="button"
+    aria-label="Hide side panel"
+    aria-controls="side-panel"
+    aria-expanded="true"
+  >&gt;</button>
   <div id="move-panel" class="game-hidden">
     <div id="move-panel-title">Legal Moves</div>
     <div id="move-panel-empty">Select a piece to see moves</div>
     <div id="move-options" aria-live="polite"></div>
-    <button
-      id="move-panel-toggle"
-      class="panel-toggle-btn panel-toggle-btn-left game-hidden"
-      type="button"
-      aria-label="Hide legal moves panel"
-      aria-controls="move-panel"
-      aria-expanded="true"
-    >&lt;</button>
   </div>
+  <button
+    id="move-panel-toggle"
+    class="panel-toggle-btn panel-toggle-btn-left game-hidden"
+    type="button"
+    aria-label="Hide legal moves panel"
+    aria-controls="move-panel"
+    aria-expanded="true"
+  >&lt;</button>
   <div id="promo-modal" class="modal-hidden game-hidden">
     <div id="promo-modal-inner">
       <div id="promo-title">Promote Pawn</div>
@@ -274,13 +275,20 @@
     </div>
   </div>
   <div id="piece-tooltip" class="game-hidden"></div>
+  <div id="mobile-move-confirm" class="game-hidden" aria-live="polite">
+    <span id="mobile-move-confirm-label">Confirm move?</span>
+    <div id="mobile-move-confirm-actions">
+      <button id="mobile-confirm-no" type="button" aria-label="Cancel move">No</button>
+      <button id="mobile-confirm-yes" type="button" aria-label="Confirm move">Yes</button>
+    </div>
+  </div>
   <canvas id="game-canvas" class="game-hidden"></canvas>
 
   <!-- SEO Content Block -->
   <section id="seo-content">
     <div class="seo-content-inner">
       <h2>Chess Reimagined in Three Dimensions</h2>
-      <p>8x8x8 is not standard chess with a 3D camera &mdash; it is an entirely new chess variant played on an 8&times;8&times;8 cube. Eight layers of 8&times;8 boards stacked vertically create a 512-space battlefield where queens command 26 directions, knights leap across three planes with up to 24 possible moves, and pawns can climb between layers. All pieces start on the center layer and must expand outward to seize territory. No downloads, no sign-ups &mdash; the game loads instantly in your browser on desktop or mobile.</p>
+      <p>chess<sup>3d</sup> is not standard chess with a 3D camera &mdash; it is an entirely new chess variant played on an 8&times;8&times;8 cube. Eight layers of 8&times;8 boards stacked vertically create a 512-space battlefield where queens command 26 directions, knights leap across three planes with up to 24 possible moves, and pawns can climb between layers. All pieces start on the center layer and must expand outward to seize territory. No downloads, no sign-ups &mdash; the game loads instantly in your browser on desktop or mobile.</p>
 
       <h2>Play Chess vs Computer for Free</h2>
       <p>The built-in chess AI offers three difficulty levels. <strong>Easy</strong> mode is perfect for learning how pieces move through the cube. <strong>Medium</strong> punishes mistakes and capitalizes on unguarded layers. <strong>Hard</strong> plays deep, aggressive 3D chess that will challenge even experienced players. Enable the AI Thinking FX visualization to watch the engine evaluate positions in real time, or use the undo button to experiment with different lines. All completely free to play.</p>
@@ -289,7 +297,7 @@
       <p>Play chess online against real opponents around the world. Create a public game visible in the lobby, or generate a private invite code to share with a friend. Choose from three game modes &mdash; Classic, Barricade (extra pawns fortifying adjacent layers), or Pawn Wall &mdash; pick your color, and start playing. No account required. Quick Play matches you instantly with an available opponent. Free multiplayer 3D chess, right in your browser.</p>
 
       <h2>What Makes 3D Chess Different?</h2>
-      <p>Standard chess has 8 directions of attack. In 8x8x8, pieces can threaten from up to 26 directions &mdash; including vertical moves between layers, planar diagonals, and space diagonals that cut through all three axes simultaneously. Rooks slide in 14 directions instead of 4. Bishops command 12 directional lines including 3D space diagonals. Knights are dramatically more powerful with triple the jump options. Pawns gain vertical mobility, able to climb or descend layers and advance diagonally between them. The result is a game that rewards spatial thinking and vertical awareness alongside traditional chess intuition.</p>
+      <p>Standard chess has 8 directions of attack. In chess<sup>3d</sup>, pieces can threaten from up to 26 directions &mdash; including vertical moves between layers, planar diagonals, and space diagonals that cut through all three axes simultaneously. Rooks slide in 14 directions instead of 4. Bishops command 12 directional lines including 3D space diagonals. Knights are dramatically more powerful with triple the jump options. Pawns gain vertical mobility, able to climb or descend layers and advance diagonally between them. The result is a game that rewards spatial thinking and vertical awareness alongside traditional chess intuition.</p>
 
       <div class="seo-links">
         <h3>Learn Chess</h3>
@@ -316,7 +324,7 @@
         <a href="/chess-puzzles/">Puzzles</a>
         <a href="/about/">About</a>
       </div>
-      <p class="footer-copy">&copy; 2026 8x8x8 &mdash; Free online 3D chess game.</p>
+      <p class="footer-copy">&copy; 2026 chess<sup>3d</sup> &mdash; Free online 3D chess game.</p>
     </div>
   </footer>
 

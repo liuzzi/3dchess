@@ -17,7 +17,7 @@ To develop multiplayer features, run both `npm run dev` and `npm run party` conc
 
 ## Architecture
 
-**8x8x8** (3dchess.org) is a browser-based 3D chess game (8×8×8 board) with AI opponents and real-time multiplayer. It's a Vite MPA (multi-page app) — each route is a separate `index.html` compiled from `vite.config.ts` rollupOptions input.
+**chess<sup>3d</sup>** (chess3d.co) is a browser-based 3D chess game (8×8×8 board) with AI opponents and real-time multiplayer. It's a Vite MPA (multi-page app) — each route is a separate `index.html` compiled from `vite.config.ts` rollupOptions input.
 
 ### Core Game Flow
 
@@ -60,7 +60,7 @@ Static HTML pages (`/chess-rules/`, `/chess-openings/`, `/chess-puzzles/`, `/how
 ## SEO Rules
 
 See `SEO_RULES.md` for full governance. Key constraints:
-- Page titles: `Primary Keyword | 8x8x8`
+- Page titles: `Primary Keyword | chess<sup>3d</sup>`
 - Meta descriptions: 120–155 characters
 - All pages need canonical URL, Open Graph tags, and JSON-LD structured data
 - Internal links must use trailing slashes (e.g., `/chess-rules/`)

@@ -1,0 +1,10 @@
+{
+  "name": "chess³ᵈ – 3D Chess",
+  "short_name": "chess³ᵈ",
+  "start_url": "/play-chess-online/",
+  "display": "standalone",
+  "background_color": "#0a0a1a",
+  "theme_color": "#0a0a1a",
+  "description": "Free online 3D chess game. Play vs AI or multiplayer in your browser.",
+  "icons": []
+}

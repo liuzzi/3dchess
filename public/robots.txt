@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://3dchess.org/sitemap.xml
+Sitemap: https://chess3d.co/sitemap.xml

@@ -41,7 +41,7 @@ export class UI {
   private sidePanelToggleBtn: HTMLButtonElement | null;
   private movePanelToggleBtn: HTMLButtonElement | null;
   private sidePanelCollapsed = false;
-  private movePanelCollapsed = false;
+  private movePanelCollapsed = true;
   private myThreatsCheckbox: HTMLInputElement | null;
   private showProtectedCheckbox: HTMLInputElement | null;
   private aiThinkingFxCheckbox: HTMLInputElement | null;
@@ -220,6 +220,7 @@ export class UI {
     }
 
     if (this.sidePanelToggleBtn) {
+      this.sidePanelToggleBtn.classList.toggle('is-panel-collapsed', this.sidePanelCollapsed);
       this.sidePanelToggleBtn.textContent = this.sidePanelCollapsed ? '<' : '>';
       this.sidePanelToggleBtn.setAttribute('aria-expanded', String(!this.sidePanelCollapsed));
       this.sidePanelToggleBtn.setAttribute(
@@ -228,6 +229,7 @@ export class UI {
       );
     }
     if (this.movePanelToggleBtn) {
+      this.movePanelToggleBtn.classList.toggle('is-panel-collapsed', this.movePanelCollapsed);
       this.movePanelToggleBtn.textContent = this.movePanelCollapsed ? '>' : '<';
       this.movePanelToggleBtn.setAttribute('aria-expanded', String(!this.movePanelCollapsed));
       this.movePanelToggleBtn.setAttribute(
@@ -270,7 +272,6 @@ export class UI {
     this.moveOptionsEl.replaceChildren();
     this.movePanelEmptyEl.textContent = emptyText;
     this.movePanelEmptyEl.style.display = '';
-    this.movePanelEl.style.display = 'none';
     this.onMoveHover(null);
   }
 
@@ -278,7 +279,6 @@ export class UI {
     if (!this.moveOptionsEl || !this.movePanelEmptyEl || !this.movePanelEl) return;
     this.moveOptionsEl.replaceChildren();
     this.onMoveHover(null);
-    this.movePanelEl.style.display = 'flex';
 
     if (moves.length === 0) {
       this.movePanelEmptyEl.textContent = 'No legal moves';

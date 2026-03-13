@@ -1,6 +1,6 @@
-# 8x8x8 SEO & Content Rules
+# chess<sup>3d</sup> SEO & Content Rules
 
-This document outlines the strict SEO, routing, and design rules for `8x8x8` (hosted at `3dchess.org`). Any AI or developer working on this codebase **must** adhere to these guidelines to maintain search engine rankings, routing integrity, and design consistency.
+This document outlines the strict SEO, routing, and design rules for `chess<sup>3d</sup>` (hosted at `chess3d.co`). Any AI or developer working on this codebase **must** adhere to these guidelines to maintain search engine rankings, routing integrity, and design consistency.
 
 ## 1. Multi-Page App (MPA) Routing Rules
 
@@ -14,16 +14,16 @@ The project uses Vite configured as a Multi-Page Application (MPA).
 
 Every single `index.html` file must contain a complete, fully populated `<head>` section. Do not omit any of these tags:
 
-*   **Title:** Must follow the format: `Primary Keyword Phrase | 8x8x8` (e.g., `<title>Chess Puzzles – Test Your Chess Skills | 8x8x8</title>`).
+*   **Title:** Must follow the format: `Primary Keyword Phrase | chess<sup>3d</sup>` (e.g., `<title>Chess Puzzles – Test Your Chess Skills | chess³ᵈ</title>`).
 *   **Meta Description:** Must be 120-155 characters, compelling, and include primary keywords.
-*   **Canonical URL:** Must point to the absolute production URL (e.g., `<link rel="canonical" href="https://3dchess.org/chess-rules/" />`).
+*   **Canonical URL:** Must point to the absolute production URL (e.g., `<link rel="canonical" href="https://chess3d.co/chess-rules/" />`).
 *   **Open Graph (OG) Tags:**
     *   `og:type` (usually "website")
     *   `og:title` (matches the page title, without the brand suffix if it gets too long)
     *   `og:description` (matches meta description)
     *   `og:url` (matches canonical)
-    *   `og:image` (always `https://3dchess.org/images/og-chess-3d.png`)
-    *   `og:site_name` ("8x8x8")
+    *   `og:image` (always `https://chess3d.co/images/og-chess-3d.png`)
+    *   `og:site_name` ("chess³ᵈ")
 *   **Twitter Cards:** Include `twitter:card`, `twitter:title`, `twitter:description`, and `twitter:image` (matching OG tags).
 *   **JSON-LD:** The main game page (`/play-chess-online/`) uses `VideoGame` schema. Other pages should use appropriate schema if applicable, or inherit the site-wide `WebSite` schema.
 
@@ -77,4 +77,4 @@ The website must match the premium, modern, "glassmorphic" 3D aesthetic of the g
 ## 5. Sitemaps and Robots
 
 *   Whenever a new page is added, it **must** be added to `public/sitemap.xml` with an appropriate `<changefreq>` and `<priority>`.
-*   `public/robots.txt` must always point to the absolute URL of the sitemap (`https://3dchess.org/sitemap.xml`).
+*   `public/robots.txt` must always point to the absolute URL of the sitemap (`https://chess3d.co/sitemap.xml`).

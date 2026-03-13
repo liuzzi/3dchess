@@ -17,6 +17,7 @@ export default defineConfig({
         openings: resolve(__dirname, 'chess-openings/index.html'),
         puzzles: resolve(__dirname, 'chess-puzzles/index.html'),
         about: resolve(__dirname, 'about/index.html'),
+        notFound: resolve(__dirname, '404.html'),
       },
     },
   },
