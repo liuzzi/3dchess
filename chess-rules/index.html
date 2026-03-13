@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>3D Chess Rules – How Pieces Move in 8&times;8&times;8 | 8x8x8</title>
+  <meta name="description" content="Learn the rules of 3D chess free online. Play on an 8×8×8 cube where queens command 26 directions, knights jump 24 ways, and pawns climb layers." />
+  <link rel="canonical" href="https://3dchess.org/chess-rules/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="3D Chess Rules – How Pieces Move in 8&times;8&times;8 | 8x8x8" />
+  <meta property="og:description" content="Learn the rules of 3D chess free online. Play on an 8×8×8 cube where queens command 26 directions, knights jump 24 ways, and pawns climb layers." />
+  <meta property="og:url" content="https://3dchess.org/chess-rules/" />
+  <meta property="og:image" content="https://3dchess.org/images/og-chess-3d.png" />
+  <meta property="og:site_name" content="8x8x8" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="3D Chess Rules – How Pieces Move in 8&times;8&times;8 | 8x8x8" />
+  <meta name="twitter:description" content="Learn the rules of 3D chess free online. Play on an 8×8×8 cube where queens command 26 directions, knights jump 24 ways, and pawns climb layers." />
+  <meta name="twitter:image" content="https://3dchess.org/images/og-chess-3d.png" />
+
+  <meta name="theme-color" content="#0a0a1a" />
+
+  <!-- JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "3D Chess Rules – How Pieces Move in 8×8×8",
+    "url": "https://3dchess.org/chess-rules/",
+    "description": "Learn the rules of 3D chess free online. Play on an 8×8×8 cube where queens command 26 directions, knights jump 24 ways, and pawns climb layers.",
+    "author": { "@type": "Organization", "name": "8x8x8", "url": "https://3dchess.org/" },
+    "publisher": { "@type": "Organization", "name": "8x8x8", "url": "https://3dchess.org/" },
+    "isPartOf": { "@type": "WebSite", "name": "8x8x8", "url": "https://3dchess.org/" }
+  }
+  </script>
+
+  <!-- Google Analytics placeholder: uncomment and add your GA4 measurement ID -->
+  <!-- <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-XXXXXXXXXX');</script> -->
+
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="content-page-layout">
+  <nav id="site-nav">
+    <a href="/" class="site-nav-logo">8x8x8</a>
+    <button id="site-nav-toggle" type="button" aria-label="Toggle navigation">&#9776;</button>
+    <div class="site-nav-links">
+      <a href="/play-chess-online/">Play Online</a>
+      <a href="/play-chess-vs-computer/">vs Computer</a>
+      <a href="/chess-rules/" class="site-nav-active">Rules</a>
+      <a href="/chess-openings/">Openings</a>
+      <a href="/chess-puzzles/">Puzzles</a>
+    </div>
+  </nav>
+
+  <main class="content-page">
+    <section class="page-hero page-hero--rules">
+      <span class="page-hero-glyph" aria-hidden="true">&#9818;</span>
+      <h1>3D Chess Rules</h1>
+      <p class="page-hero-subtitle">Every piece gains new movement directions on the 8&times;8&times;8 cube. Threats come from 26 directions.</p>
+      <div class="page-hero-stats">
+        <div class="page-hero-stat">
+          <span class="page-hero-stat-value">512</span>
+          <span class="page-hero-stat-label">cells</span>
+        </div>
+        <div class="page-hero-stat">
+          <span class="page-hero-stat-value">26</span>
+          <span class="page-hero-stat-label">directions</span>
+        </div>
+        <div class="page-hero-stat">
+          <span class="page-hero-stat-value">8</span>
+          <span class="page-hero-stat-label">layers</span>
+        </div>
+      </div>
+    </section>
+
+    <div class="content-inner content-inner--has-hero">
+      <div class="section-text">
+        <p>8&times;8&times;8 is chess reinvented in three dimensions. Instead of a flat 64-square board, you play on a cube of 512 spaces &mdash; 8 layers of 8&times;8 grids stacked vertically. Every piece gains new movement directions, threats come from above and below, and spatial awareness replaces memorized patterns. If you know standard chess, you already understand the goal: checkmate the enemy king. Everything else changes.</p>
+      </div>
+
+      <div class="section-text">
+        <h2>The Board: An 8&times;8&times;8 Cube</h2>
+        <p>The board is a cube made up of 8 horizontal layers, each an 8&times;8 grid. Every square has three coordinates: <strong>column</strong> (x), <strong>row</strong> (y), and <strong>layer</strong> (z). Layer 1 is the bottom of the cube, layer 8 is the top. Think of each layer as a traditional chessboard floating in space, connected to the layers above and below it.</p>
+        <h2>Starting Position</h2>
+        <p>All pieces begin on the center layer (layer 4). The arrangement on that layer mirrors standard chess: White&rsquo;s back rank (rook, knight, bishop, queen, king, bishop, knight, rook) sits on row 1, with pawns on row 2. Black&rsquo;s pieces mirror this on rows 7 and 8. The other seven layers start completely empty &mdash; your pieces must expand outward into the cube as the game unfolds.</p>
+      </div>
+
+      <div class="section-text">
+        <h2>How Pieces Move in 3D</h2>
+        <p>In standard chess, pieces move across a flat plane. In 3D chess, every piece gains additional movement directions through the vertical axis. The geometry of a cube changes everything.</p>
+      </div>
+
+      <div class="piece-grid">
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9819;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">Queen</span>
+              <span class="piece-card-directions">26 directions</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">The queen is the ultimate piece. She combines every movement available to the rook and bishop, giving her access to all 26 possible directions through the cube. She can slide along any axis, any planar diagonal, or any space diagonal for as many squares as her path is clear. In an open position, a centrally placed queen can threaten squares on every single layer.</p>
+        </div>
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9814;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">Rook</span>
+              <span class="piece-card-directions">14 directions</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">Forget the 4-direction rook from flat chess. In 3D, the rook slides in <strong>14 directions</strong>: the 6 axis-aligned directions (left, right, forward, backward, up, down) plus 8 planar diagonals. These planar diagonals move through two axes while keeping the third fixed &mdash; think of them as diagonals within a flat slice of the cube. The rook can move in any direction where at least one coordinate stays constant.</p>
+        </div>
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9815;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">Bishop</span>
+              <span class="piece-card-directions">12 directions</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">The bishop also commands 12 directions, but they&rsquo;re entirely different from the rook&rsquo;s. It has 4 traditional diagonals within a single layer (changing column and row, layer stays fixed) plus 8 <strong>space diagonals</strong> that cut through all three axes simultaneously. Every bishop move changes at least two coordinates. Where the rook owns the planes and axes, the bishop owns the diagonals &mdash; and in a cube, there are far more diagonals to exploit.</p>
+        </div>
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9812;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">King</span>
+              <span class="piece-card-directions">26 dir / 1 step</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">The king moves exactly like the queen but is limited to one square per turn. That means up to 26 possible destinations from any interior square. Despite the constraint, a 3D king is far more mobile than its 2D counterpart (8 squares max), making checkmate patterns more complex to construct.</p>
+        </div>
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9816;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">Knight</span>
+              <span class="piece-card-directions">24 possible jumps</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">The knight keeps its signature L-shaped jump: two squares along one axis, then one square along a perpendicular axis. In 2D, this yields up to 8 possible moves. In 3D, the L-shape can be oriented across three pairs of axes (xy, xz, and yz planes), giving the knight up to <strong>24 possible destinations</strong>. Knights still jump over pieces, making them devastating in the crowded center layers early in the game.</p>
+        </div>
+        <div class="piece-card">
+          <div class="piece-card-header">
+            <span class="piece-card-icon">&#9817;</span>
+            <div class="piece-card-meta">
+              <span class="piece-card-name">Pawn</span>
+              <span class="piece-card-directions">vertical mobility</span>
+            </div>
+          </div>
+          <p class="piece-card-desc">Pawns gain the most surprising new abilities. Beyond moving forward along the row axis, a pawn can move <strong>straight up or down</strong> between layers, or take <strong>staircase moves</strong> &mdash; moving forward and up or forward and down simultaneously. On its first move, a pawn can advance two squares in any of its movement directions. Pawn captures happen diagonally forward (left or right column) and can occur on the same layer, one layer up, or one layer down. This gives each pawn up to <strong>6 possible capture squares</strong>, compared to just 2 in standard chess. Pawns are far from expendable in 3D &mdash; they&rsquo;re versatile, dangerous, and essential for controlling vertical space.</p>
+        </div>
+      </div>
+
+      <div class="section-text">
+        <h2>Check, Checkmate &amp; Stalemate</h2>
+        <p>Check and checkmate follow the same logic as standard chess: if the king is attacked, the player must escape the threat by moving, blocking, or capturing. The difference is scale &mdash; threats arrive from <strong>26 directions</strong> instead of 8, making king safety a three-dimensional puzzle. Spotting an attack from two layers away along a space diagonal takes practice.</p>
+        <p><strong>Stalemate</strong> works identically: if a player has no legal moves but is not in check, the game is a draw.</p>
+      </div>
+
+      <div class="section-text">
+        <h2>Special Rules in 3D Chess</h2>
+        <p><strong>Promotion</strong> &mdash; When a pawn reaches the opponent&rsquo;s back row (row 8 for White, row 1 for Black), it promotes to a queen, rook, bishop, or knight &mdash; just like standard chess.</p>
+        <p><strong>No castling</strong> &mdash; Castling is not part of 3D chess. With threats coming from every vertical angle, the concept of tucking the king behind a rook wall doesn&rsquo;t translate to three dimensions.</p>
+        <p><strong>No en passant</strong> &mdash; En passant is not implemented in the 3D ruleset. Pawn interactions are already complex enough with six capture directions and layer-climbing movement.</p>
+      </div>
+
+      <div class="section-text">
+        <h2>Game Modes</h2>
+        <p><strong>Classic</strong> &mdash; The standard starting position described above. All pieces on the center layer, pure 3D chess from the first move.</p>
+        <p><strong>Barricade</strong> &mdash; Extra pawns are placed on adjacent layers, creating a defensive shell around each army. You must break through the barricade before attacking the opponent&rsquo;s core pieces. This mode rewards patience and positional play.</p>
+        <p><strong>Pawn Wall</strong> &mdash; An alternative setup that emphasizes pawn structure and vertical control from the very start.</p>
+      </div>
+
+      <div class="section-text">
+        <p>Ready to try these rules in action? <a href="/play-chess-online/">Play 3D chess online</a> for free &mdash; no download, no sign-up required. Start with the AI on Easy difficulty to practice 3D movement, or jump into <a href="/play-chess-online/">free online multiplayer</a> when you're ready.</p>
+      </div>
+
+      <div class="content-cta">
+        <a class="cta-btn" href="/play-chess-online/">Play 3D Chess Online Free</a>
+      </div>
+
+      <div class="seo-links">
+        <h3>Learn Chess</h3>
+        <ul>
+          <li><a href="/how-to-play-chess/">How to Play Chess &mdash; Beginner's Guide</a></li>
+          <li><a href="/chess-openings/">Chess Openings &mdash; Best Openings for Beginners</a></li>
+          <li><a href="/chess-puzzles/">Chess Puzzles &mdash; Test Your Skills</a></li>
+          <li><a href="/play-chess-vs-computer/">Play Chess vs Computer &mdash; Free AI Opponent</a></li>
+        </ul>
+      </div>
+    </div>
+  </main>
+
+  <footer id="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="/play-chess-online/">Play Chess Online</a>
+        <a href="/play-chess-vs-computer/">Play vs Computer</a>
+        <a href="/3d-chess/">3D Chess</a>
+        <a href="/chess-rules/">Chess Rules</a>
+        <a href="/how-to-play-chess/">How to Play</a>
+        <a href="/chess-openings/">Openings</a>
+        <a href="/chess-puzzles/">Puzzles</a>
+        <a href="/about/">About</a>
+      </div>
+      <p class="footer-copy">&copy; 2026 8x8x8 &mdash; Free online 3D chess game.</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/content-page.ts"></script>
+</body>
+</html>

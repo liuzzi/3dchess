@@ -8,7 +8,7 @@ import { Bot } from './bot';
 import type { WorkerResponse } from './botWorker';
 import { Network } from './network';
 import * as THREE from 'three';
-import { Piece, PieceColor, PieceType, Position3D, posKey, GameMode, SetupMode, boardToWorld } from './types';
+import { Piece, PieceColor, PieceType, Position3D, posKey, GameMode, SetupMode, Difficulty, boardToWorld } from './types';
 import { getLegalMoves, isKingInCheck } from './movement';
 import { playAiThinkTick, playCapture, playCheck, playCheckmate, playStep } from './sound';
 import { wireOnlineEvents } from './onlineBridge';
@@ -528,9 +528,7 @@ function recalcThreatVisuals(includeMyThreats = myThreatsActive): void {
   if (!game) return;
 
   const perspectiveColor = resolvePerspectiveColor();
-  const attackerColor = game.mode.type === 'local'
-    ? oppositeColor(game.currentTurn)
-    : oppositeColor(perspectiveColor);
+  const attackerColor = oppositeColor(perspectiveColor);
 
   const threatsByAttacker = computeThreatLinesByAttacker(game.board);
   const enemyThreatPairs = attackerColor === PieceColor.White
@@ -1000,6 +998,7 @@ async function handleBotTurn(): Promise<void> {
 }
 
 function showGame(): void {
+  document.body.classList.add('game-active');
   document.querySelectorAll('.game-hidden').forEach(el => {
     el.classList.remove('game-hidden');
   });
@@ -1041,6 +1040,7 @@ function hideMenu(): void {
 }
 
 function showMenu(): void {
+  document.body.classList.remove('game-active');
   const menu = document.getElementById('menu-screen')!;
   if (menuHideTimeoutId !== null) {
     window.clearTimeout(menuHideTimeoutId);
@@ -1615,6 +1615,13 @@ function parseOnlineHash():
   return null;
 }
 
+function parseQueryParams(): { mode?: string; difficulty?: string } | null {
+  const params = new URLSearchParams(window.location.search);
+  const mode = params.get('mode');
+  if (!mode) return null;
+  return { mode, difficulty: params.get('difficulty') ?? undefined };
+}
+
 loadModels().then(() => {
   const onlineParams = parseOnlineHash();
   if (onlineParams) {
@@ -1629,27 +1636,33 @@ loadModels().then(() => {
     } else {
       acceptInviteFromHash(onlineParams.code);
     }
-  } else {
-    menuController = setupMenu({
-      startLocal: (setup) => {
-        hideMenu();
-        showGame();
-        initGame({ type: 'local', setup });
-      },
-      startBot: (difficulty, setup) => {
-        hideMenu();
-        showGame();
-        initGame({ type: 'bot', difficulty, setup });
-      },
-      goOnline: () => {
-        goOnline();
-      },
-    });
-    const lobbyBrowseBack = document.getElementById('lobby-browse-back');
-    lobbyBrowseBack?.addEventListener('click', returnToHomeFromLobby);
-    const lobbyBackBtn = document.getElementById('lobby-back-btn');
-    lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
-    const gameHomeBtn = document.getElementById('game-home-btn');
-    gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
+    return;
+  }
+
+  menuController = setupMenu({
+    startBot: (difficulty, setup) => {
+      hideMenu();
+      showGame();
+      initGame({ type: 'bot', difficulty, setup });
+    },
+    goOnline: () => {
+      goOnline();
+    },
+  });
+  const lobbyBrowseBack = document.getElementById('lobby-browse-back');
+  lobbyBrowseBack?.addEventListener('click', returnToHomeFromLobby);
+  const lobbyBackBtn = document.getElementById('lobby-back-btn');
+  lobbyBackBtn?.addEventListener('click', returnToHomeFromLobby);
+  const gameHomeBtn = document.getElementById('game-home-btn');
+  gameHomeBtn?.addEventListener('click', returnToMenuFromGame);
+
+  const queryParams = parseQueryParams();
+  if (queryParams) {
+    window.history.replaceState({}, '', window.location.pathname);
+    if (queryParams.mode === 'bot') {
+      menuController.expandToMode('bot');
+    } else if (queryParams.mode === 'online') {
+      goOnline();
+    }
   }
 });

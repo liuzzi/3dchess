@@ -65,7 +65,7 @@ export type Difficulty = 'easy' | 'medium' | 'hard';
 export type SetupMode = 'classic' | 'barricade' | 'pawnWall';
 
 export interface GameMode {
-  type: 'local' | 'bot' | 'online';
+  type: 'bot' | 'online';
   setup?: SetupMode;
   difficulty?: Difficulty;
   localColor?: PieceColor;

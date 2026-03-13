@@ -1,7 +1,7 @@
 import { Difficulty, PieceColor, SetupMode } from './types';
 import { playMenuClick, playMenuConfirm } from './sound';
 
-type MainMode = 'local' | 'bot' | 'online';
+type MainMode = 'bot' | 'online';
 type ExpandableMode = MainMode;
 
 interface SubOption {
@@ -12,13 +12,13 @@ interface SubOption {
 }
 
 export interface MenuControllerActions {
-  startLocal: (setup: SetupMode) => void;
   startBot: (difficulty: Difficulty, setup: SetupMode) => void;
   goOnline: () => void;
 }
 
 export interface MenuControllerHandle {
   resetToMainMenu: () => void;
+  expandToMode: (mode: 'bot') => void;
 }
 
 export function setupMenu(actions: MenuControllerActions): MenuControllerHandle {
@@ -30,6 +30,7 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
   if (!menuScreen || !cubeContainer || !submenu || !subCubeStack || !backBtn) {
     return {
       resetToMainMenu: () => {},
+      expandToMode: () => {},
     };
   }
 
@@ -136,17 +137,13 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
     const setupSelect = ensureGameModeControl();
     setupSelect.value = selectedSetup;
 
-    const options: SubOption[] = mode === 'local'
+    const options: SubOption[] = mode === 'bot'
       ? [
-          { label: 'Start', detail: 'Same Device', toneClass: 'tone-soft', onSelect: () => actions.startLocal(selectedSetup) },
+          { label: 'Easy', detail: 'Calm Play', toneClass: 'tone-soft', onSelect: () => actions.startBot('easy', selectedSetup) },
+          { label: 'Medium', detail: 'Balanced', toneClass: 'tone-mid', onSelect: () => actions.startBot('medium', selectedSetup) },
+          { label: 'Hard', detail: 'No Mercy', toneClass: 'tone-hard', onSelect: () => actions.startBot('hard', selectedSetup) },
         ]
-      : mode === 'bot'
-        ? [
-            { label: 'Easy', detail: 'Calm Play', toneClass: 'tone-soft', onSelect: () => actions.startBot('easy', selectedSetup) },
-            { label: 'Medium', detail: 'Balanced', toneClass: 'tone-mid', onSelect: () => actions.startBot('medium', selectedSetup) },
-            { label: 'Hard', detail: 'No Mercy', toneClass: 'tone-hard', onSelect: () => actions.startBot('hard', selectedSetup) },
-          ]
-        : [];
+      : [];
 
     subCubeStack.replaceChildren();
     options.forEach((option, index) => {
@@ -226,5 +223,5 @@ export function setupMenu(actions: MenuControllerActions): MenuControllerHandle 
     });
   });
 
-  return { resetToMainMenu };
+  return { resetToMainMenu, expandToMode: expandMode };
 }

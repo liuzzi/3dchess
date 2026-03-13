@@ -30,7 +30,7 @@ export class Game {
   gameOver = false;
   awaitingPromotion: Piece | null = null;
   botThinking = false;
-  mode: GameMode = { type: 'local' };
+  mode: GameMode = { type: 'bot' };
   history: HistoryEntry[] = [];
   lastMove: { from: Position3D; to: Position3D } | null = null;
   private pendingPostMovePiece: Piece | null = null;

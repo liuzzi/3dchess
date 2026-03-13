@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Play Chess Online in 3D – Free Browser Chess Game | 8x8x8</title>
+  <meta name="description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board. No download required." />
+  <link rel="canonical" href="https://3dchess.org/play-chess-online/" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Play Chess Online in 3D – Free Browser Chess Game" />
+  <meta property="og:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board." />
+  <meta property="og:url" content="https://3dchess.org/play-chess-online/" />
+  <meta property="og:image" content="https://3dchess.org/images/og-chess-3d.png" />
+  <meta property="og:site_name" content="8x8x8" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Play Chess Online in 3D – Free Browser Chess Game" />
+  <meta name="twitter:description" content="Play chess online instantly in your browser. Challenge AI opponents or play multiplayer chess on a fully interactive 3D board." />
+  <meta name="twitter:image" content="https://3dchess.org/images/og-chess-3d.png" />
+
+  <meta name="theme-color" content="#0a0a1a" />
+
+  <!-- JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "VideoGame",
+    "name": "8x8x8",
+    "url": "https://3dchess.org/play-chess-online/",
+    "description": "Play chess online in 3D. Challenge AI or play multiplayer on a fully interactive 3D board.",
+    "applicationCategory": "Game",
+    "operatingSystem": "Web",
+    "gamePlatform": "Web Browser",
+    "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 1, "maxValue": 2 },
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "author": { "@type": "Organization", "name": "8x8x8", "url": "https://3dchess.org" }
+  }
+  </script>
+
+  <!-- Google Analytics placeholder: uncomment and add your GA4 measurement ID -->
+  <!-- <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-XXXXXXXXXX');</script> -->
+
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- Site Navigation -->
+  <nav id="site-nav">
+    <a href="/" class="site-nav-logo">8x8x8</a>
+    <button id="site-nav-toggle" type="button" aria-label="Toggle navigation">&#9776;</button>
+    <div class="site-nav-links">
+      <a href="/play-chess-online/" class="site-nav-active">Play Online</a>
+      <a href="/play-chess-vs-computer/">vs Computer</a>
+      <a href="/chess-rules/">Rules</a>
+      <a href="/chess-openings/">Openings</a>
+      <a href="/chess-puzzles/">Puzzles</a>
+    </div>
+  </nav>
+
+  <div id="menu-screen">
+    <div id="menu-bg" aria-hidden="true">
+      <div class="menu-bg-layer menu-bg-layer-1" data-depth="0.55"></div>
+      <div class="menu-bg-layer menu-bg-layer-2" data-depth="1"></div>
+      <div class="menu-bg-layer menu-bg-layer-3" data-depth="1.45"></div>
+    </div>
+    <div id="menu-inner">
+      <h1 id="menu-title">8x8x8</h1>
+      <p id="menu-subtitle">chess reimagined</p>
+      <div id="menu-cubes">
+        <button class="cube-wrapper mode-bot" data-mode="bot" type="button" aria-label="Play versus Bot">
+          <div class="cube">
+            <div class="cube-face front">
+              <span class="cube-title">vs Bot</span>
+              <span class="cube-desc">AI Duel</span>
+            </div>
+            <div class="cube-face back"></div>
+            <div class="cube-face left"></div>
+            <div class="cube-face right"></div>
+            <div class="cube-face top"></div>
+            <div class="cube-face bottom"></div>
+          </div>
+        </button>
+        <button class="cube-wrapper mode-online" data-mode="online" type="button" aria-label="Play Online">
+          <div class="cube">
+            <div class="cube-face front">
+              <span class="cube-title">Online</span>
+              <span class="cube-desc">Multiplayer</span>
+            </div>
+            <div class="cube-face back"></div>
+            <div class="cube-face left"></div>
+            <div class="cube-face right"></div>
+            <div class="cube-face top"></div>
+            <div class="cube-face bottom"></div>
+          </div>
+        </button>
+      </div>
+      <div id="menu-submenu">
+        <button id="menu-back-btn" type="button">Back</button>
+        <div id="menu-subcubes"></div>
+      </div>
+    </div>
+  </div>
+  <div id="online-lobby" style="display:none;">
+    <div id="lobby-bg" aria-hidden="true">
+      <div class="lobby-bg-layer lobby-bg-layer-1"></div>
+      <div class="lobby-bg-layer lobby-bg-layer-2"></div>
+      <div class="lobby-bg-layer lobby-bg-layer-3"></div>
+    </div>
+    <div id="lobby-inner">
+      <div id="lobby-browse">
+        <h2 id="lobby-heading">Online Games</h2>
+        <div id="room-table-wrap">
+          <table id="room-table">
+            <thead>
+              <tr><th>Mode</th><th>You Play</th><th></th></tr>
+            </thead>
+            <tbody id="room-table-body"></tbody>
+          </table>
+          <div id="room-table-empty">No games available &mdash; create one to get started!</div>
+        </div>
+        <div id="lobby-action-row">
+          <button id="lobby-create-btn" type="button">Create Game</button>
+          <button id="lobby-quick-btn" type="button">Quick Play</button>
+        </div>
+        <div id="room-code-section">
+          <span class="room-code-label">Have an invite code?</span>
+          <div id="room-code-row">
+            <input id="room-code-input" placeholder="Enter code" maxlength="6" />
+            <button id="room-code-join-btn" type="button">Join</button>
+          </div>
+        </div>
+        <button id="lobby-browse-back" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+      <div id="lobby-create" style="display:none;">
+        <h2 class="lobby-view-title">Create Game</h2>
+        <div class="create-field">
+          <label for="create-mode-select">Game Mode</label>
+          <select id="create-mode-select">
+            <option value="classic">Classic</option>
+            <option value="barricade">Barricade</option>
+            <option value="pawnWall">Pawn Wall</option>
+          </select>
+        </div>
+        <div class="create-field">
+          <label>Your Color</label>
+          <div id="create-color-buttons">
+            <button class="create-toggle-btn selected" data-color="white" type="button">&#9812; White</button>
+            <button class="create-toggle-btn" data-color="black" type="button">&#9818; Black</button>
+          </div>
+        </div>
+        <div class="create-field">
+          <label>Visibility</label>
+          <div id="create-vis-buttons">
+            <button class="create-toggle-btn selected" data-vis="public" type="button">Public</button>
+            <button class="create-toggle-btn" data-vis="private" type="button">Private</button>
+          </div>
+        </div>
+        <button id="create-start-btn" type="button" class="lobby-primary-btn">Start</button>
+        <button id="create-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+      <div id="lobby-quick" style="display:none;">
+        <h2 class="lobby-view-title">Quick Play</h2>
+        <div class="create-field">
+          <label for="quick-mode-select">Game Mode</label>
+          <select id="quick-mode-select">
+            <option value="classic">Classic</option>
+            <option value="barricade">Barricade</option>
+            <option value="pawnWall">Pawn Wall</option>
+          </select>
+        </div>
+        <button id="quick-start-btn" type="button" class="lobby-primary-btn">Find Match</button>
+        <button id="quick-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+      <div id="lobby-waiting" style="display:none;">
+        <div id="lobby-title">Waiting for opponent...</div>
+        <div id="lobby-link-row">
+          <input id="lobby-link" readonly />
+          <button id="lobby-copy-btn">Copy</button>
+        </div>
+        <div id="lobby-status"></div>
+        <button id="lobby-back-btn" type="button" class="lobby-secondary-btn">Back</button>
+      </div>
+    </div>
+  </div>
+  <div id="game-frame" class="game-hidden">
+    <button id="game-home-btn" type="button" aria-label="Return to main menu">8x8x8</button>
+  </div>
+  <div id="ui-overlay" class="game-hidden">
+    <div id="top-bar">
+      <div id="turn-indicator">White's Turn</div>
+      <div id="game-status"></div>
+    </div>
+  </div>
+  <div id="side-panel" class="game-hidden">
+    <button id="new-game-btn">New Game</button>
+    <button id="undo-btn" style="display:none" disabled>Undo</button>
+    <label id="my-threats-control" for="my-threats-checkbox">
+      <input id="my-threats-checkbox" type="checkbox" checked />
+      <span>Show My Threats</span>
+    </label>
+    <label id="show-protected-control" for="show-protected-checkbox">
+      <input id="show-protected-checkbox" type="checkbox" checked />
+      <span>Show Protected</span>
+    </label>
+    <label id="ai-thinking-fx-control" for="ai-thinking-fx-checkbox">
+      <input id="ai-thinking-fx-checkbox" type="checkbox" />
+      <span>AI Thinking FX</span>
+    </label>
+    <div id="frosting-control" class="panel-slider-control">
+      <div class="panel-slider-title">Frosting</div>
+      <input id="frosting-slider" class="panel-slider" type="range" min="0" max="100" value="11" />
+    </div>
+    <div id="controls-help">
+      <div class="help-title">Controls</div>
+      <div class="help-item">Click piece to select</div>
+      <div class="help-item">Click green cell to move</div>
+      <div class="help-item">Drag to rotate</div>
+      <div class="help-item">Scroll to zoom</div>
+    </div>
+    <div id="captured-pieces">
+      <div class="captured-entry">
+        <div class="captured-label">White</div>
+        <div id="captured-white" class="captured-row"></div>
+      </div>
+      <div class="captured-entry">
+        <div class="captured-label">Black</div>
+        <div id="captured-black" class="captured-row"></div>
+      </div>
+    </div>
+    <button
+      id="side-panel-toggle"
+      class="panel-toggle-btn panel-toggle-btn-right game-hidden"
+      type="button"
+      aria-label="Hide side panel"
+      aria-controls="side-panel"
+      aria-expanded="true"
+    >&gt;</button>
+  </div>
+  <div id="move-panel" class="game-hidden">
+    <div id="move-panel-title">Legal Moves</div>
+    <div id="move-panel-empty">Select a piece to see moves</div>
+    <div id="move-options" aria-live="polite"></div>
+    <button
+      id="move-panel-toggle"
+      class="panel-toggle-btn panel-toggle-btn-left game-hidden"
+      type="button"
+      aria-label="Hide legal moves panel"
+      aria-controls="move-panel"
+      aria-expanded="true"
+    >&lt;</button>
+  </div>
+  <div id="promo-modal" class="modal-hidden game-hidden">
+    <div id="promo-modal-inner">
+      <div id="promo-title">Promote Pawn</div>
+      <div id="promo-options">
+        <button class="promo-btn" data-piece="queen"><span class="promo-icon"></span>Queen</button>
+        <button class="promo-btn" data-piece="rook"><span class="promo-icon"></span>Rook</button>
+        <button class="promo-btn" data-piece="bishop"><span class="promo-icon"></span>Bishop</button>
+        <button class="promo-btn" data-piece="knight"><span class="promo-icon"></span>Knight</button>
+      </div>
+    </div>
+  </div>
+  <div id="confirm-modal" class="modal-hidden">
+    <div id="confirm-modal-inner">
+      <button id="confirm-close-btn" type="button" aria-label="Close confirmation">X</button>
+      <div id="confirm-title">Start New Game?</div>
+      <div id="confirm-message">Current progress will be lost.</div>
+      <div id="confirm-actions">
+        <button id="confirm-ok-btn" type="button">Start</button>
+      </div>
+    </div>
+  </div>
+  <div id="piece-tooltip" class="game-hidden"></div>
+  <canvas id="game-canvas" class="game-hidden"></canvas>
+
+  <!-- SEO Content Block -->
+  <section id="seo-content">
+    <div class="seo-content-inner">
+      <h2>Chess Reimagined in Three Dimensions</h2>
+      <p>8x8x8 is not standard chess with a 3D camera &mdash; it is an entirely new chess variant played on an 8&times;8&times;8 cube. Eight layers of 8&times;8 boards stacked vertically create a 512-space battlefield where queens command 26 directions, knights leap across three planes with up to 24 possible moves, and pawns can climb between layers. All pieces start on the center layer and must expand outward to seize territory. No downloads, no sign-ups &mdash; the game loads instantly in your browser on desktop or mobile.</p>
+
+      <h2>Play Chess vs Computer for Free</h2>
+      <p>The built-in chess AI offers three difficulty levels. <strong>Easy</strong> mode is perfect for learning how pieces move through the cube. <strong>Medium</strong> punishes mistakes and capitalizes on unguarded layers. <strong>Hard</strong> plays deep, aggressive 3D chess that will challenge even experienced players. Enable the AI Thinking FX visualization to watch the engine evaluate positions in real time, or use the undo button to experiment with different lines. All completely free to play.</p>
+
+      <h2>Free Online Multiplayer Chess</h2>
+      <p>Play chess online against real opponents around the world. Create a public game visible in the lobby, or generate a private invite code to share with a friend. Choose from three game modes &mdash; Classic, Barricade (extra pawns fortifying adjacent layers), or Pawn Wall &mdash; pick your color, and start playing. No account required. Quick Play matches you instantly with an available opponent. Free multiplayer 3D chess, right in your browser.</p>
+
+      <h2>What Makes 3D Chess Different?</h2>
+      <p>Standard chess has 8 directions of attack. In 8x8x8, pieces can threaten from up to 26 directions &mdash; including vertical moves between layers, planar diagonals, and space diagonals that cut through all three axes simultaneously. Rooks slide in 14 directions instead of 4. Bishops command 12 directional lines including 3D space diagonals. Knights are dramatically more powerful with triple the jump options. Pawns gain vertical mobility, able to climb or descend layers and advance diagonally between them. The result is a game that rewards spatial thinking and vertical awareness alongside traditional chess intuition.</p>
+
+      <div class="seo-links">
+        <h3>Learn Chess</h3>
+        <ul>
+          <li><a href="/chess-rules/">Chess Rules &mdash; Complete Guide</a></li>
+          <li><a href="/how-to-play-chess/">How to Play Chess &mdash; Beginner's Guide</a></li>
+          <li><a href="/chess-openings/">Chess Openings &mdash; Best Openings for Beginners</a></li>
+          <li><a href="/chess-puzzles/">Chess Puzzles &mdash; Test Your Skills</a></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Site Footer -->
+  <footer id="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="/play-chess-online/">Play Chess Online</a>
+        <a href="/play-chess-vs-computer/">Play vs Computer</a>
+        <a href="/3d-chess/">3D Chess</a>
+        <a href="/chess-rules/">Chess Rules</a>
+        <a href="/how-to-play-chess/">How to Play</a>
+        <a href="/chess-openings/">Openings</a>
+        <a href="/chess-puzzles/">Puzzles</a>
+        <a href="/about/">About</a>
+      </div>
+      <p class="footer-copy">&copy; 2026 8x8x8 &mdash; Free online 3D chess game.</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/src/main.ts"></script>
+  <script type="module" src="/src/content-page.ts"></script>
+</body>
+</html>

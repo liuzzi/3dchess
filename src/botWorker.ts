@@ -31,21 +31,15 @@ const EG_VALUE: Record<PieceType, number> = {
 };
 
 const TIME_LIMIT: Record<Difficulty, number> = {
-  easy: 800,
-  medium: 3200,
+  easy: 2000,
+  medium: 5000,
   hard: 7500,
 };
 
 const MAX_DEPTH: Record<Difficulty, number> = {
-  easy: 2,
-  medium: 6,
+  easy: 4,
+  medium: 7,
   hard: 9,
-};
-
-const NOISE_AMPLITUDE: Record<Difficulty, number> = {
-  easy: 120,
-  medium: 4,
-  hard: 0,
 };
 
 class SearchAborted extends Error {}
@@ -55,9 +49,9 @@ let searchDeadline = 0;
 let nodeLimit = Infinity;
 
 const NODE_LIMIT: Record<Difficulty, number> = {
-  easy: 160_000,
-  medium: 1_400_000,
-  hard: 1_800_000,
+  easy: 400_000,
+  medium: 2_000_000,
+  hard: 2_500_000,
 };
 
 const MATE_SCORE = 1_000_000;
@@ -165,53 +159,6 @@ function checkTime(): void {
 
 function getOpponent(color: PieceColor): PieceColor {
   return color === PieceColor.White ? PieceColor.Black : PieceColor.White;
-}
-
-function legalAttackInfo(
-  board: Board,
-  attackerColor: PieceColor,
-  target: Position3D,
-): { count: number; cheapestValue: number } {
-  let count = 0;
-  let cheapestValue = Infinity;
-  const pieces = Array.from(board.getPiecesOfColor(attackerColor));
-  for (const p of pieces) {
-    let attacksTarget = false;
-    forEachAttackedSquare(board, p, (x, y, z) => {
-      if (!attacksTarget && x === target.x && y === target.y && z === target.z) attacksTarget = true;
-    });
-    if (!attacksTarget) continue;
-
-    const applied = board.applyMove(p, target);
-    const legal = !isKingInCheck(board, attackerColor);
-    board.unapplyMove(applied);
-    if (!legal) continue;
-
-    count++;
-    const v = PIECE_VALUE[p.type];
-    if (v < cheapestValue) cheapestValue = v;
-  }
-  return { count, cheapestValue };
-}
-
-function immediateBlunderPenalty(board: Board, movedPiece: Piece): number {
-  if (movedPiece.type === PieceType.King) return 0;
-  const pieceValue = PIECE_VALUE[movedPiece.type];
-  const enemy = getOpponent(movedPiece.color);
-
-  const enemyInfo = legalAttackInfo(board, enemy, movedPiece.position);
-  if (enemyInfo.count === 0) return 0;
-  const ownInfo = legalAttackInfo(board, movedPiece.color, movedPiece.position);
-
-  let penalty = 0;
-  if (ownInfo.count === 0) penalty += pieceValue * 1.05;
-  else if (enemyInfo.count > ownInfo.count) penalty += pieceValue * 0.55;
-
-  // If the square can be hit by a much cheaper attacker, that trade is usually bad.
-  if (enemyInfo.cheapestValue <= pieceValue * 0.6) penalty += pieceValue * 0.35;
-  if (movedPiece.type === PieceType.Queen || movedPiece.type === PieceType.Rook) penalty *= 1.2;
-
-  return Math.min(pieceValue * 1.6, penalty);
 }
 
 // 64-bit Zobrist hashing via two 32-bit integers
@@ -399,19 +346,28 @@ function pieceActivity(mobility: number, piece: Piece): number {
 
 const evalWhiteAttacks = new Int32Array(512);
 const evalBlackAttacks = new Int32Array(512);
+const evalWhiteCheapest = new Int32Array(512);
+const evalBlackCheapest = new Int32Array(512);
 
 function attackedAndDefendedCounts(
   board: Board,
-): { white: Int32Array; black: Int32Array } {
+): { white: Int32Array; black: Int32Array; whiteCheapest: Int32Array; blackCheapest: Int32Array } {
   evalWhiteAttacks.fill(0);
   evalBlackAttacks.fill(0);
+  evalWhiteCheapest.fill(99999);
+  evalBlackCheapest.fill(99999);
   for (const piece of board.pieces) {
-    const targetMap = piece.color === PieceColor.White ? evalWhiteAttacks : evalBlackAttacks;
+    const isWhite = piece.color === PieceColor.White;
+    const targetMap = isWhite ? evalWhiteAttacks : evalBlackAttacks;
+    const cheapestMap = isWhite ? evalWhiteCheapest : evalBlackCheapest;
+    const val = PIECE_VALUE[piece.type];
     forEachAttackedSquare(board, piece, (x, y, z) => {
-      targetMap[posKeyXYZ(x, y, z)]++;
+      const key = posKeyXYZ(x, y, z);
+      targetMap[key]++;
+      if (val < cheapestMap[key]) cheapestMap[key] = val;
     });
   }
-  return { white: evalWhiteAttacks, black: evalBlackAttacks };
+  return { white: evalWhiteAttacks, black: evalBlackAttacks, whiteCheapest: evalWhiteCheapest, blackCheapest: evalBlackCheapest };
 }
 
 const evalMoveCache = new Map<Piece, Position3D[]>();
@@ -452,6 +408,8 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
   const attacks = attackedAndDefendedCounts(board);
   const botAttacks = botColor === PieceColor.White ? attacks.white : attacks.black;
   const oppAttacks = botColor === PieceColor.White ? attacks.black : attacks.white;
+  const oppCheapest = botColor === PieceColor.White ? attacks.blackCheapest : attacks.whiteCheapest;
+  const botCheapest = botColor === PieceColor.White ? attacks.whiteCheapest : attacks.blackCheapest;
 
   for (const piece of board.pieces) {
     if (piece.type === PieceType.King) continue;
@@ -464,16 +422,24 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
     const defendedByOwn = piece.color === botColor
       ? botAttacks[key]
       : oppAttacks[key];
+      
+    const cheapestAttackerVal = piece.color === botColor ? oppCheapest[key] : botCheapest[key];
+    const pieceVal = PIECE_VALUE[piece.type];
+
     // Penalize hanging/overloaded pieces at near-material scale to avoid
     // "win a pawn, lose a rook/queen" blunders when search gets noisy/pruned.
     const hangingPenalty = Math.min(
-      PIECE_VALUE[piece.type] * 1.05,
-      PIECE_VALUE[piece.type] * 0.72 + attackedByOpp * 36,
+      pieceVal * 1.05,
+      pieceVal * 0.72 + attackedByOpp * 36,
     );
     const overloadedPenalty = Math.min(
-      PIECE_VALUE[piece.type] * 0.22,
+      pieceVal * 0.22,
       attackedByOpp * 16,
     );
+    
+    // If a high-value piece is attacked by a lower-value piece, it's bad even if defended!
+    const badTradePenalty = cheapestAttackerVal < pieceVal ? (pieceVal - cheapestAttackerVal) * 0.8 : 0;
+
     if (defendedByOwn === 0) {
       if (piece.color === botColor) {
         mg -= hangingPenalty;
@@ -482,13 +448,14 @@ function evaluate(board: Board, botColor: PieceColor, toMove: PieceColor): numbe
         mg += hangingPenalty;
         eg += hangingPenalty * 0.85;
       }
-    } else if (attackedByOpp > defendedByOwn) {
+    } else if (attackedByOpp > defendedByOwn || badTradePenalty > 0) {
+      const penalty = Math.max(overloadedPenalty, badTradePenalty);
       if (piece.color === botColor) {
-        mg -= overloadedPenalty;
-        eg -= overloadedPenalty * 0.8;
+        mg -= penalty;
+        eg -= penalty * 0.8;
       } else {
-        mg += overloadedPenalty;
-        eg += overloadedPenalty * 0.8;
+        mg += penalty;
+        eg += penalty * 0.8;
       }
     }
   }
@@ -1013,13 +980,11 @@ function searchAtDepth(
   let alpha = rootAlpha;
 
   for (const move of ordered) {
-    let rawScore: number;
-    let safetyPenalty = 0;
+    let score: number;
     const applied = board.applyMove(move.piece, move.to);
     try {
       autoPromoteToQueen(move.piece);
-      rawScore = -negamax(board, depth - 1, -rootBeta, -alpha, getOpponent(color), color, 1);
-      safetyPenalty = immediateBlunderPenalty(board, move.piece);
+      score = -negamax(board, depth - 1, -rootBeta, -alpha, getOpponent(color), color, 1);
     } catch (e) {
       if (e instanceof SearchAborted) {
         if (scored.length > 0) break;
@@ -1029,11 +994,9 @@ function searchAtDepth(
       board.unapplyMove(applied);
     }
 
-    const safetyScale = activeDifficulty === 'medium' ? 1.0 : activeDifficulty === 'easy' ? 0.7 : 0.4;
-    const adjustedScore = rawScore - safetyPenalty * safetyScale;
-    scored.push({ fromPos: move.piece.position, to: move.to, score: adjustedScore, rawScore });
-    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score: adjustedScore });
-    if (adjustedScore > alpha) alpha = adjustedScore;
+    scored.push({ fromPos: move.piece.position, to: move.to, score, rawScore: score });
+    onRootMoveScored?.({ depth, fromPos: move.piece.position, to: move.to, score });
+    if (score > alpha) alpha = score;
     if (alpha >= rootBeta) break;
   }
 
@@ -1106,8 +1069,9 @@ function computeAdaptiveTimeLimit(board: Board, color: PieceColor, difficulty: D
   if (totalPieces <= 14) factor += 0.2;
 
   const raw = Math.round(base * factor);
-  if (difficulty === 'medium') return Math.max(2600, Math.min(raw, 6200));
-  return Math.max(3500, Math.min(raw, 12000));
+  if (difficulty === 'easy') return Math.max(1500, Math.min(raw, 3500));
+  if (difficulty === 'medium') return Math.max(3500, Math.min(raw, 7500));
+  return Math.max(4500, Math.min(raw, 14000));
 }
 
 function buildTimeBudget(board: Board, color: PieceColor, difficulty: Difficulty): TimeBudget {
@@ -1158,18 +1122,6 @@ function resolveRootMoves(
     if (found) selected.push(found);
   }
   return selected;
-}
-
-function selectWithNoise(moves: ScoredMove[], noiseAmplitude: number): ScoredMove {
-  if (noiseAmplitude === 0 || moves.length <= 1) return moves[0];
-  const bestRaw = moves[0].rawScore;
-  const candidates = moves.filter(m => bestRaw - m.rawScore <= noiseAmplitude);
-  
-  // Use exponential weighting to heavily bias toward the best moves.
-  // Math.random() ^ 3 means a 60% chance to pick index 0, ~15% for index 1, etc.
-  // This prevents the "ADHD" effect of uniformly picking random moves from the candidate pool.
-  const index = Math.floor(Math.pow(Math.random(), 3) * candidates.length);
-  return candidates[index];
 }
 
 function iterativeSearch(
@@ -1236,7 +1188,7 @@ function iterativeSearch(
             emitDetailedProgress,
             pvMoveKey,
           );
-          const currentBest = result[0].rawScore;
+          const currentBest = result[0].score;
           if (currentBest > alpha && currentBest < beta) break;
           window = Math.min(ASPIRATION_MAX, window * 2);
           if (window >= ASPIRATION_MAX) {
@@ -1274,16 +1226,16 @@ function iterativeSearch(
         depth,
         fromPos: best.fromPos,
         to: best.to,
-        score: best.rawScore,
+        score: best.score,
         pvLine: buildDepthPvLine(board, color, best, 6),
         pvCandidates: result
           .slice(0, 3)
-          .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 6), score: m.rawScore })),
+          .map((m) => ({ pvLine: buildDepthPvLine(board, color, m, 6), score: m.score })),
       };
       depthResults.push(depthResult);
       onProgress?.('depth', depthResult);
       pvMoveKey = moveKeyNum(best.fromPos, best.to);
-      previousScore = best.rawScore;
+      previousScore = best.score;
 
       if (budget.softMs > 0) {
         const elapsed = performance.now() - searchStart;
@@ -1321,7 +1273,7 @@ function iterativeSearch(
     throw new Error('Bot has no legal moves');
   }
 
-  const best = selectWithNoise(bestResult, NOISE_AMPLITUDE[difficulty]);
+  const best = bestResult[0];
   return { best, completedDepth, depthResults };
 }
 

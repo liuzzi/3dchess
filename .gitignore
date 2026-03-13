@@ -3,3 +3,10 @@ dist
 *.local
 .vite
 /models/
+
+# PartyKit durable state
+.partykit/
+
+# MCP / tooling
+.playwright-mcp/
+.superpowers/
