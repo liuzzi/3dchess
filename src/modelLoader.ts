@@ -52,16 +52,17 @@ export async function loadModels(): Promise<void> {
     });
   };
 
+  const base = import.meta.env.BASE_URL;
+
   const promises = pieces.map(async (type) => {
     try {
       const [high, med, low] = await Promise.all([
-        loadPromise(`/models/${type}_high.glb`),
-        loadPromise(`/models/${type}_med.glb`),
-        loadPromise(`/models/${type}_low.glb`),
+        loadPromise(`${base}models/${type}_high.glb`),
+        loadPromise(`${base}models/${type}_med.glb`),
+        loadPromise(`${base}models/${type}_low.glb`),
       ]);
 
       const lod = new THREE.LOD();
-      // Distance thresholds for zooming
       lod.addLevel(high, 0);
       lod.addLevel(med, 12);
       lod.addLevel(low, 22);

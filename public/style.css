@@ -483,6 +483,72 @@ body {
   transform: translate3d(0, 0, 0);
 }
 
+#menu-portal-links {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  z-index: 10;
+}
+
+.portal-link-btn {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(170, 184, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(9, 12, 32, 0.78);
+  color: #e0e0ff;
+  font-family: 'Orbitron', monospace;
+  font-weight: 600;
+  text-decoration: none;
+  line-height: 1;
+  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.12s ease;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+#menu-portal-links .portal-link-btn {
+  padding: 8px 20px;
+  font-size: 14px;
+}
+
+.portal-link-btn:hover {
+  background: rgba(20, 24, 52, 0.88);
+  border-color: rgba(200, 210, 255, 0.5);
+}
+
+#menu-portal-links .portal-link-btn:hover {
+  transform: translateY(-2px);
+}
+
+.portal-link-btn .accent-3d {
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--cp-purple), var(--cp-violet));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.portal-link-icon {
+  padding: 8px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50% !important;
+  aspect-ratio: 1 / 1;
+}
+
+.portal-link-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+#menu-portal-links .portal-link-btn .accent-3d {
+  font-size: inherit;
+}
+
 #menu-subcubes {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
@@ -1179,6 +1245,29 @@ body {
 #game-home-btn:focus-visible {
   outline: 2px solid rgba(220, 228, 255, 0.62);
   outline-offset: 2px;
+}
+
+#game-portal-links {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 10px;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+#game-portal-links .portal-link-btn {
+  padding: 6px 16px;
+  font-size: 13px;
+}
+
+#game-portal-links .portal-link-btn:hover {
+  transform: translateY(-1px);
+}
+
+#game-portal-links .portal-link-btn .accent-3d {
+  font-size: inherit;
 }
 
 /* ─── UI overlay ─── */

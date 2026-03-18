@@ -15,10 +15,10 @@ export class Renderer {
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1e1e44);
+    this.scene.background = new THREE.Color(0x252554);
 
     this.camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
-    this.camera.position.set(14, 12, 14);
+    this.camera.position.set(17, 17, 17);
     this.camera.lookAt(3.5, 3.5, 3.5);
 
     this.webgl = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -287,6 +287,14 @@ export class Renderer {
       this.rafId = requestAnimationFrame(loop);
     };
     this.rafId = requestAnimationFrame(loop);
+  }
+
+  setCameraForSide(side: 'white' | 'black'): void {
+    const d = 13.5;
+    const zSign = side === 'white' ? -1 : 1;
+    this.camera.position.set(3.5 + d, 3.5 + d, 3.5 + zSign * d);
+    this.controls.target.set(3.5, 3.5, 3.5);
+    this.controls.update();
   }
 
   dispose(): void {

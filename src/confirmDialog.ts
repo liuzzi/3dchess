@@ -1,20 +1,30 @@
 const CONFIRM_MODAL_ID = 'confirm-modal';
+const CONFIRM_TITLE_ID = 'confirm-title';
 const CONFIRM_MESSAGE_ID = 'confirm-message';
 const CONFIRM_OK_ID = 'confirm-ok-btn';
 const CONFIRM_CLOSE_ID = 'confirm-close-btn';
 
-const FALLBACK_MESSAGE = 'Start a new game? Current progress will be lost.';
-
 let active = false;
 
-export function confirmNewGame(): Promise<boolean> {
+interface ConfirmOptions {
+  title?: string;
+  message?: string;
+  okLabel?: string;
+}
+
+function showConfirm(opts: ConfirmOptions = {}): Promise<boolean> {
   const modal = document.getElementById(CONFIRM_MODAL_ID);
+  const titleEl = document.getElementById(CONFIRM_TITLE_ID);
   const messageEl = document.getElementById(CONFIRM_MESSAGE_ID);
   const okBtn = document.getElementById(CONFIRM_OK_ID) as HTMLButtonElement | null;
   const closeBtn = document.getElementById(CONFIRM_CLOSE_ID) as HTMLButtonElement | null;
 
+  const title = opts.title ?? 'Are you sure?';
+  const message = opts.message ?? 'Current progress will be lost.';
+  const okLabel = opts.okLabel ?? 'OK';
+
   if (!modal || !messageEl || !okBtn || !closeBtn) {
-    return Promise.resolve(window.confirm(FALLBACK_MESSAGE));
+    return Promise.resolve(window.confirm(message));
   }
 
   if (active) {
@@ -23,7 +33,9 @@ export function confirmNewGame(): Promise<boolean> {
   active = true;
 
   return new Promise((resolve) => {
-    messageEl.textContent = 'Current progress will be lost.';
+    if (titleEl) titleEl.textContent = title;
+    messageEl.textContent = message;
+    okBtn.textContent = okLabel;
     modal.classList.remove('modal-hidden');
     okBtn.focus();
 
@@ -57,5 +69,21 @@ export function confirmNewGame(): Promise<boolean> {
     closeBtn.addEventListener('click', onCancel);
     modal.addEventListener('click', onBackdropClick);
     window.addEventListener('keydown', onKeydown);
+  });
+}
+
+export function confirmNewGame(): Promise<boolean> {
+  return showConfirm({
+    title: 'Start New Game?',
+    message: 'Current progress will be lost.',
+    okLabel: 'Start',
+  });
+}
+
+export function confirmLeaveGame(): Promise<boolean> {
+  return showConfirm({
+    title: 'Leave Game?',
+    message: 'Your current game will end.',
+    okLabel: 'Leave',
   });
 }

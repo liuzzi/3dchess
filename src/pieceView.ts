@@ -10,10 +10,17 @@ const ORB_HOVER_COLOR = 0xffea77;
 const ORB_SELECTED_COLOR = 0xffbb00;
 const CUSTOM_MODEL_FILL = 0.85;
 const CUSTOM_MODEL_SCALE_BY_TYPE: Partial<Record<PieceType, number>> = {
-  [PieceType.Knight]: 1.5,
+  [PieceType.Knight]: 0.9,
+  [PieceType.Rook]: 0.9,
+  [PieceType.Pawn]: 0.75,
 };
 const CUSTOM_MODEL_Y_OFFSET_BY_TYPE: Partial<Record<PieceType, number>> = {
-  [PieceType.Knight]: 0.0,
+  [PieceType.Knight]: -0.07,
+  [PieceType.Rook]: -0.04,
+  [PieceType.Pawn]: -0.12,
+};
+const CUSTOM_MODEL_Y_ROTATION_BY_TYPE: Partial<Record<PieceType, number>> = {
+  [PieceType.Knight]: -Math.PI / 2,
 };
 
 export class PieceView {
@@ -128,7 +135,6 @@ export class PieceView {
           const origMat = child.material;
           const newMat = mat.clone();
           
-          if (origMat.map) newMat.map = origMat.map;
           if (origMat.normalMap) newMat.normalMap = origMat.normalMap;
           if (origMat.roughnessMap) newMat.roughnessMap = origMat.roughnessMap;
           if (origMat.metalnessMap) newMat.metalnessMap = origMat.metalnessMap;
@@ -143,7 +149,8 @@ export class PieceView {
       });
       
       clone.position.y += CUSTOM_MODEL_Y_OFFSET_BY_TYPE[piece.type] ?? 0;
-      if (!isWhite) clone.rotation.y = Math.PI;
+      clone.rotation.y = CUSTOM_MODEL_Y_ROTATION_BY_TYPE[piece.type] ?? 0;
+      if (!isWhite) clone.rotation.y += Math.PI;
       group.add(clone);
     } else {
       // Fallback if model not loaded

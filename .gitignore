@@ -1,5 +1,7 @@
 node_modules
 dist
+dist-portal
+chess3d-portal.zip
 *.local
 .vite
 /models/

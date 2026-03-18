@@ -19,6 +19,7 @@ import {
   computeProtectionLinesForThreatenedPieces,
 } from './threatPreview';
 import { autoPromoteToQueen } from './promotion';
+import { confirmLeaveGame } from './confirmDialog';
 import { LobbyClient } from './lobbyClient';
 import type { RoomInfo } from './lobbyTypes';
 
@@ -781,6 +782,7 @@ function initGame(mode: GameMode): void {
   pieceView = new PieceView();
   game = new Game();
   game.setMode(mode);
+  renderer.setCameraForSide(resolvePerspectiveColor());
   interaction = new Interaction(renderer, boardView);
 
   ui = new UI(game, boardView, {
@@ -1167,7 +1169,12 @@ function showMenu(): void {
   menuController?.resetToMainMenu();
 }
 
-function returnToMenuFromGame(): void {
+async function returnToMenuFromGame(): Promise<void> {
+  if (game && !game.gameOver) {
+    const confirmed = await confirmLeaveGame();
+    if (!confirmed) return;
+  }
+
   cleanupLobbyClient();
   if (network) {
     if (game && game.mode.type === 'online' && !game.gameOver) {

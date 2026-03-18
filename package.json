@@ -6,6 +6,7 @@
     "dev": "vite",
     "party": "partykit dev",
     "build": "tsc && vite build",
+    "build:portal": "./scripts/build-portal.sh",
     "preview": "vite preview"
   },
   "keywords": [],
