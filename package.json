@@ -14,6 +14,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "partykit": "^0.0.115",
     "peerjs": "^1.5.5",
     "three": "^0.182.0",

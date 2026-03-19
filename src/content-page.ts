@@ -2,6 +2,12 @@
  * Content page script: nav toggle and background parallax.
  */
 
+import { inject } from '@vercel/analytics';
+import { injectSpeedInsights } from '@vercel/speed-insights';
+
+inject();
+injectSpeedInsights();
+
 if ('scrollRestoration' in history) {
   history.scrollRestoration = 'manual';
 }
